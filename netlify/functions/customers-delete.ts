@@ -1,4 +1,5 @@
 import { json, logAudit, parseBody, requireUser, route, sql } from "./_shared/auth";
+import { requireSudo } from "./_shared/security";
 import { UUID_RE } from "./_shared/customers";
 import { deleteFile, driveConfigured } from "./_shared/drive";
 
@@ -10,6 +11,8 @@ export const handler = route("POST", async (event) => {
   const auth = await requireUser(event, ["customers.delete"]);
   if ("response" in auth) return auth.response;
   const { user } = auth;
+  const denied = requireSudo(event, user);
+  if (denied) return denied;
 
   const body = parseBody(event);
   const id = String(body.id ?? "");

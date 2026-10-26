@@ -1,4 +1,4 @@
-import { json, requireUser, route, sql } from "./_shared/auth";
+import { json, logAuditOnce, requireUser, route, sql } from "./_shared/auth";
 import { canEditCustomer, canViewCustomer, UUID_RE } from "./_shared/customers";
 
 // Scheda di un cliente: dati, note e storico
@@ -23,6 +23,8 @@ export const handler = route("GET", async (event) => {
   if (!customer || !canViewCustomer(user, customer.agent_id, customer.shared_ids)) {
     return json(404, { error: "Cliente non trovato" });
   }
+
+  await logAuditOnce(user.id, "cliente_consultato", "customers", id, 10);
 
   const notes = await sql`
     SELECT n.id, n.body, n.created_at, u.first_name AS author_name, u.last_name AS author_last_name

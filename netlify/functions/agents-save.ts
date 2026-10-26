@@ -8,6 +8,7 @@ import {
   route,
   sql,
 } from "./_shared/auth";
+import { requireSudo } from "./_shared/security";
 
 const STATUSES = ["attivo", "sospeso"];
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -44,7 +45,7 @@ function readFields(body: Record<string, any>): Fields | string {
   return f;
 }
 
-// Azioni dell'amministratore sugli agenti: create | update | reset_password | set_permissions
+// Azioni dell'amministratore sugli agenti: create | update | reset_password | reset_2fa | set_permissions
 export const handler = route("POST", async (event) => {
   const auth = await requireUser(event, ["agents.manage"]);
   if ("response" in auth) return auth.response;
@@ -56,6 +57,8 @@ export const handler = route("POST", async (event) => {
 
   /* ----- NUOVO AGENTE ----- */
   if (action === "create") {
+    const denied = requireSudo(event, actor);
+    if (denied) return denied;
     const f = readFields(body);
     if (typeof f === "string") return json(400, { error: f });
     if ((await sql`SELECT 1 FROM roles WHERE key = ${f.role}`).length === 0) return json(400, { error: "Ruolo non valido" });
@@ -92,6 +95,10 @@ export const handler = route("POST", async (event) => {
     if (isSelf && (f.status !== "attivo" || f.role !== current.role)) {
       return json(400, { error: "Non puoi sospendere o cambiare il ruolo del tuo stesso account" });
     }
+    if (f.role !== current.role || f.status !== current.status || f.email !== current.email) {
+      const denied = requireSudo(event, actor);
+      if (denied) return denied;
+    }
     const clash = await sql`SELECT 1 FROM users WHERE lower(email) = ${f.email} AND id <> ${targetId}`;
     if (clash.length > 0) return json(409, { error: "Esiste gia' un altro utente con questa email" });
 
@@ -116,6 +123,8 @@ export const handler = route("POST", async (event) => {
 
   /* ----- NUOVA PASSWORD TEMPORANEA ----- */
   if (action === "reset_password") {
+    const denied = requireSudo(event, actor);
+    if (denied) return denied;
     if (isSelf) return json(400, { error: "Per la tua password usa il cambio password" });
     const tempPassword = generateTempPassword();
     const hash = await hashPassword(tempPassword);
@@ -124,8 +133,21 @@ export const handler = route("POST", async (event) => {
     return json(200, { tempPassword });
   }
 
+  /* ----- REIMPOSTA LA VERIFICA IN DUE PASSAGGI (telefono perso) ----- */
+  if (action === "reset_2fa") {
+    const denied = requireSudo(event, actor);
+    if (denied) return denied;
+    if (isSelf) return json(400, { error: "Per il tuo account usa il tuo profilo" });
+    await sql`UPDATE users SET totp_enabled = false, totp_secret = NULL, totp_last_step = NULL, session_version = session_version + 1 WHERE id = ${targetId}`;
+    await sql`DELETE FROM user_recovery_codes WHERE user_id = ${targetId}`;
+    await logAudit(actor.id, "2fa_reimpostata", "users", targetId);
+    return json(200, { ok: true });
+  }
+
   /* ----- PERMESSI PERSONALIZZATI ----- */
   if (action === "set_permissions") {
+    const denied = requireSudo(event, actor);
+    if (denied) return denied;
     if (isSelf) return json(400, { error: "Non puoi modificare i permessi del tuo stesso account" });
 
     const valid = new Set<string>((await sql`SELECT key FROM permissions`).map((r) => r.key as string));

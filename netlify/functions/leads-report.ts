@@ -1,11 +1,13 @@
-import { json, requireUser, route, sql } from "./_shared/auth";
+import { logAuditOnce, rateLimit, json, requireUser, route, sql } from "./_shared/auth";
 import { UUID_RE } from "./_shared/customers";
 
 // Report e pulizia: correzioni fatte dagli agenti, numeri segnalati, esiti per lista, dati puliti da esportare.
 export const handler = route("GET", async (event) => {
   const auth = await requireUser(event, ["leads.manage"]);
   if ("response" in auth) return auth.response;
+  if (!(await rateLimit(`leadreport:${auth.user.id}`, 30, 60))) return json(429, { error: "Troppe richieste. Riprova tra un minuto." });
 
+  await logAuditOnce(auth.user.id, "report_lead_consultato", "leads", null, 10);
   const q = event.queryStringParameters ?? {};
   const listId = q.list_id && UUID_RE.test(q.list_id) ? q.list_id : null;
 

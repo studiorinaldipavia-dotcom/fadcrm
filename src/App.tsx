@@ -51,6 +51,15 @@ import {
   getStatus,
   login,
   logout,
+  login2fa,
+  reauth,
+  logoutAll,
+  mfaBegin,
+  mfaEnable,
+  mfaDisable,
+  mfaNewCodes,
+  resetAgent2fa,
+  setReauthHandler,
   resetAgentPassword,
   saveTheme,
   setAgentPermissions,
@@ -331,6 +340,8 @@ function LoginPage({ onLoggedIn }: { onLoggedIn: (user: SessionUser) => void }) 
   const [info, setInfo] = useState("")
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
+  const [challenge, setChallenge] = useState("")
+  const [code, setCode] = useState("")
   const [form, setForm] = useState({
     first_name: "",
     last_name: "",
@@ -370,9 +381,31 @@ function LoginPage({ onLoggedIn }: { onLoggedIn: (user: SessionUser) => void }) 
           password: form.password,
         })
       }
-      const user = await login(form.email, form.password, form.remember)
-      onLoggedIn(user)
+      const result = await login(form.email, form.password, form.remember)
+      if ("challenge" in result) {
+        setChallenge(result.challenge)
+        setCode("")
+        setBusy(false)
+        return
+      }
+      onLoggedIn(result.user)
     } catch (err) {
+      setError(err instanceof Error ? err.message : "Errore imprevisto")
+      setBusy(false)
+    }
+  }
+
+  const submitCode = async () => {
+    setError("")
+    setBusy(true)
+    try {
+      onLoggedIn(await login2fa(challenge, code))
+    } catch (err) {
+      const expired = (err as any)?.code === "challenge_expired"
+      if (expired) {
+        setChallenge("")
+        setForm((current) => ({ ...current, password: "" }))
+      }
       setError(err instanceof Error ? err.message : "Errore imprevisto")
       setBusy(false)
     }
@@ -424,7 +457,49 @@ function LoginPage({ onLoggedIn }: { onLoggedIn: (user: SessionUser) => void }) 
                 ? "Serve il codice RECOVERY_TOKEN impostato su Netlify. Vale solo per gli amministratori."
                 : "Inserisci le tue credenziali per accedere a FAD LeadHub."}
           </p>
-          {mode === "loading" ? (
+          {challenge ? (
+            <form
+              onSubmit={(event) => {
+                event.preventDefault()
+                submitCode()
+              }}
+            >
+              <label className="field-label">
+                <span>Codice di verifica</span>
+                <input
+                  required
+                  autoFocus
+                  autoComplete="one-time-code"
+                  inputMode="text"
+                  placeholder="123456"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                />
+              </label>
+              <p className="login-intro">
+                Apri l'app di autenticazione e scrivi il codice a 6 cifre. Se non hai il telefono, usa uno dei codici di recupero.
+              </p>
+              {error && (
+                <p className="form-error" role="alert">
+                  {error}
+                </p>
+              )}
+              <Button className="primary-button login-submit" type="submit">
+                {busy ? "Attendi…" : "Verifica e accedi"} <Icon name="arrow" size={17} />
+              </Button>
+              <button
+                type="button"
+                className="link-button"
+                onClick={() => {
+                  setChallenge("")
+                  setError("")
+                  setForm((current) => ({ ...current, password: "" }))
+                }}
+              >
+                Indietro
+              </button>
+            </form>
+          ) : mode === "loading" ? (
             <p className="login-intro">Caricamento…</p>
           ) : (
             <form
@@ -465,11 +540,11 @@ function LoginPage({ onLoggedIn }: { onLoggedIn: (user: SessionUser) => void }) 
                 />
               </label>
               <label className="field-label">
-                <span>{isSetup || isRecovery ? "Password (minimo 10 caratteri)" : "Password"}</span>
+                <span>{isSetup || isRecovery ? "Password (minimo 12 caratteri)" : "Password"}</span>
                 <div className="password-field">
                   <input
                     required
-                    minLength={isSetup || isRecovery ? 10 : undefined}
+                    minLength={isSetup || isRecovery ? 12 : undefined}
                     type={visible ? "text" : "password"}
                     autoComplete={isSetup || isRecovery ? "new-password" : "current-password"}
                     placeholder="La tua password"
@@ -1745,10 +1820,10 @@ function ChangePasswordPage({
               />
             </label>
             <label className="full">
-              <span>Nuova password (minimo 10 caratteri)</span>
+              <span>Nuova password (minimo 12 caratteri)</span>
               <input
                 required
-                minLength={10}
+                minLength={12}
                 type="password"
                 autoComplete="new-password"
                 value={next}
@@ -1759,7 +1834,7 @@ function ChangePasswordPage({
               <span>Ripeti la nuova password</span>
               <input
                 required
-                minLength={10}
+                minLength={12}
                 type="password"
                 autoComplete="new-password"
                 value={repeat}
@@ -1862,6 +1937,15 @@ function AgentModal({
       setNotice("Nuova password temporanea generata. Al prossimo accesso dovrà cambiarla.")
       onChanged()
     })
+
+  const resetTwoFactor = () => {
+    if (!window.confirm("Reimpostare la verifica in due passaggi di questa persona? Dovrà attivarla di nuovo al prossimo accesso.")) return
+    run(async () => {
+      await resetAgent2fa(agent!.id)
+      setNotice("Verifica in due passaggi reimpostata.")
+      onChanged()
+    })
+  }
 
   const savePermissions = () =>
     run(async () => {
@@ -2045,6 +2129,11 @@ function AgentModal({
                 <Button className="secondary-button" onClick={resetPassword}>
                   Nuova password temporanea
                 </Button>
+                {agent?.totp_enabled && (
+                  <Button className="secondary-button" onClick={resetTwoFactor}>
+                    Reimposta 2FA
+                  </Button>
+                )}
                 {canDelete && (
                   <Button className="secondary-button danger-outline" onClick={() => setDeleting(true)}>
                     Elimina profilo
@@ -3578,7 +3667,334 @@ function MapPage({
   )
 }
 
-function ProfileModal({ user, onClose }: { user: SessionUser; onClose: () => void }) {
+/* ---------- Verifica in due passaggi ---------- */
+
+function TwoFactorSetup({ onDone, onCancel }: { onDone: () => void; onCancel?: () => void }) {
+  const [step, setStep] = useState<"intro" | "scan" | "codes">("intro")
+  const [secret, setSecret] = useState("")
+  const [uri, setUri] = useState("")
+  const [code, setCode] = useState("")
+  const [codes, setCodes] = useState<string[]>([])
+  const [error, setError] = useState("")
+  const [busy, setBusy] = useState(false)
+
+  const start = async () => {
+    setError("")
+    setBusy(true)
+    try {
+      const data = await mfaBegin()
+      setSecret(data.secret)
+      setUri(data.uri)
+      setStep("scan")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Errore imprevisto")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const confirm = async () => {
+    setError("")
+    setBusy(true)
+    try {
+      const data = await mfaEnable(code)
+      setCodes(data.codes)
+      setStep("codes")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Errore imprevisto")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (step === "codes") return <RecoveryCodes codes={codes} onDone={onDone} />
+
+  return (
+    <div className="mfa-box">
+      {step === "intro" ? (
+        <>
+          <p className="muted">
+            Oltre alla password, all'accesso ti verrà chiesto un codice a 6 cifre generato da un'app sul tuo telefono
+            (Google Authenticator, Microsoft Authenticator, Authy, 1Password…).
+          </p>
+          {error && <p className="form-error flush">{error}</p>}
+          <div className="modal-actions flush">
+            {onCancel && (
+              <Button className="secondary-button" onClick={onCancel}>
+                Annulla
+              </Button>
+            )}
+            <Button className="primary-button" onClick={start}>
+              {busy ? "Attendi…" : "Inizia"}
+            </Button>
+          </div>
+        </>
+      ) : (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            confirm()
+          }}
+        >
+          <p className="muted">
+            1. Dal telefono tocca il link qui sotto, oppure nell'app scegli «Inserisci una chiave» e scrivi la chiave.
+          </p>
+          <a className="secondary-button" href={uri}>
+            Apri nell'app di autenticazione
+          </a>
+          <input className="link-field mfa-secret" readOnly value={secret} onFocus={(e) => e.currentTarget.select()} />
+          <p className="muted">2. Scrivi qui il codice a 6 cifre che mostra l'app.</p>
+          <input
+            required
+            autoFocus
+            autoComplete="one-time-code"
+            inputMode="numeric"
+            placeholder="123456"
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+          />
+          {error && <p className="form-error flush">{error}</p>}
+          <div className="modal-actions flush">
+            {onCancel && (
+              <Button className="secondary-button" onClick={onCancel}>
+                Annulla
+              </Button>
+            )}
+            <Button className="primary-button" type="submit">
+              {busy ? "Attendi…" : "Conferma e attiva"}
+            </Button>
+          </div>
+        </form>
+      )}
+    </div>
+  )
+}
+
+function RecoveryCodes({ codes, onDone }: { codes: string[]; onDone: () => void }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <div className="mfa-box">
+      <p className="form-ok flush">Verifica in due passaggi attiva.</p>
+      <p className="muted">
+        Salva questi codici di recupero in un posto sicuro (es. gestore di password). Ognuno vale una volta sola e serve
+        se perdi il telefono. <strong>Non verranno mostrati di nuovo.</strong>
+      </p>
+      <pre className="recovery-codes">{codes.join("\n")}</pre>
+      <div className="modal-actions flush">
+        <Button
+          className="secondary-button"
+          onClick={() => {
+            navigator.clipboard?.writeText(codes.join("\n")).then(() => setCopied(true)).catch(() => {})
+          }}
+        >
+          {copied ? "Copiati" : "Copia i codici"}
+        </Button>
+        <Button className="primary-button" onClick={onDone}>
+          Ho salvato i codici
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+// Schermata obbligatoria per chi ha un ruolo con permessi alti e non ha ancora attivato la 2FA
+function MfaSetupPage({ onDone, onLogout }: { onDone: () => void; onLogout: () => void }) {
+  return (
+    <main className="boot-screen">
+      <div className="modal">
+        <div className="modal-head">
+          <div>
+            <p className="panel-kicker neutral">Sicurezza dell'account</p>
+            <h2>Attiva la verifica in due passaggi</h2>
+          </div>
+        </div>
+        <p className="muted pad">Per il tuo ruolo è obbligatoria: protegge i dati dei clienti anche se qualcuno scopre la tua password.</p>
+        <TwoFactorSetup onDone={onDone} />
+        <div className="modal-actions">
+          <Button className="secondary-button" onClick={onLogout}>
+            Esci
+          </Button>
+        </div>
+      </div>
+    </main>
+  )
+}
+
+function TwoFactorSection({ user, onChanged }: { user: SessionUser; onChanged: (enabled: boolean) => void }) {
+  const [mode, setMode] = useState<"idle" | "setup" | "disable" | "codes">("idle")
+  const [code, setCode] = useState("")
+  const [codes, setCodes] = useState<string[] | null>(null)
+  const [error, setError] = useState("")
+
+  const act = async (kind: "disable" | "codes") => {
+    setError("")
+    try {
+      if (kind === "disable") {
+        await mfaDisable(code)
+        onChanged(false)
+        setMode("idle")
+      } else {
+        setCodes((await mfaNewCodes(code)).codes)
+      }
+      setCode("")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Errore imprevisto")
+    }
+  }
+
+  return (
+    <>
+      <p className="profile-section">Verifica in due passaggi</p>
+      <div className="mfa-box">
+        {mode === "setup" ? (
+          <TwoFactorSetup
+            onCancel={() => setMode("idle")}
+            onDone={() => {
+              onChanged(true)
+              setMode("idle")
+            }}
+          />
+        ) : codes ? (
+          <RecoveryCodes
+            codes={codes}
+            onDone={() => {
+              setCodes(null)
+              setMode("idle")
+            }}
+          />
+        ) : user.totp_enabled ? (
+          <>
+            <p className="form-ok flush">Attiva</p>
+            {mode === "idle" ? (
+              <div className="modal-actions flush">
+                <Button className="secondary-button" onClick={() => setMode("codes")}>
+                  Nuovi codici di recupero
+                </Button>
+                {!user.mfa_required && (
+                  <Button className="secondary-button danger-outline" onClick={() => setMode("disable")}>
+                    Disattiva
+                  </Button>
+                )}
+              </div>
+            ) : (
+              <>
+                <label className="full">
+                  <span>Codice dell'app</span>
+                  <input autoComplete="one-time-code" inputMode="numeric" value={code} onChange={(e) => setCode(e.target.value)} />
+                </label>
+                {error && <p className="form-error flush">{error}</p>}
+                <div className="modal-actions flush">
+                  <Button
+                    className="secondary-button"
+                    onClick={() => {
+                      setMode("idle")
+                      setError("")
+                      setCode("")
+                    }}
+                  >
+                    Annulla
+                  </Button>
+                  <Button className="primary-button" onClick={() => act(mode === "disable" ? "disable" : "codes")}>
+                    Conferma
+                  </Button>
+                </div>
+              </>
+            )}
+          </>
+        ) : (
+          <>
+            <p className="muted">Non attiva. Consigliata per proteggere il tuo account.</p>
+            <div className="modal-actions flush">
+              <Button className="primary-button" onClick={() => setMode("setup")}>
+                Attiva
+              </Button>
+            </div>
+          </>
+        )}
+      </div>
+    </>
+  )
+}
+
+// Finestra "Conferma la tua password": compare da sola quando si tenta un'azione sensibile
+function ReauthModal() {
+  const [pending, setPending] = useState<((ok: boolean) => void) | null>(null)
+  const [password, setPassword] = useState("")
+  const [error, setError] = useState("")
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    setReauthHandler(
+      () =>
+        new Promise<boolean>((resolve) => {
+          setPassword("")
+          setError("")
+          setPending(() => resolve)
+        }),
+    )
+    return () => setReauthHandler(null)
+  }, [])
+
+  if (!pending) return null
+  const close = (ok: boolean) => {
+    pending(ok)
+    setPending(null)
+  }
+  const submit = async () => {
+    setError("")
+    setBusy(true)
+    try {
+      await reauth(password)
+      close(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Errore imprevisto")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="modal-layer" role="presentation">
+      <div className="modal" role="dialog" aria-modal="true">
+        <div className="modal-head">
+          <div>
+            <p className="panel-kicker neutral">Azione protetta</p>
+            <h2>Conferma la tua password</h2>
+          </div>
+        </div>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            submit()
+          }}
+        >
+          <div className="form-grid">
+            <label className="full">
+              <span>Per continuare riscrivi la tua password</span>
+              <input required autoFocus type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+            </label>
+          </div>
+          {error && (
+            <p className="form-error modal-error" role="alert">
+              {error}
+            </p>
+          )}
+          <div className="modal-actions">
+            <Button className="secondary-button" onClick={() => close(false)}>
+              Annulla
+            </Button>
+            <Button className="primary-button" type="submit">
+              {busy ? "Attendi…" : "Conferma"}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+function ProfileModal({ user, onClose, onUserChange }: { user: SessionUser; onClose: () => void; onUserChange: (user: SessionUser) => void }) {
+  const [loggedOutOthers, setLoggedOutOthers] = useState(false)
   const [current, setCurrent] = useState("")
   const [next, setNext] = useState("")
   const [repeat, setRepeat] = useState("")
@@ -3644,12 +4060,12 @@ function ProfileModal({ user, onClose }: { user: SessionUser; onClose: () => voi
               <input required type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} />
             </label>
             <label>
-              <span>Nuova password (min. 10 caratteri)</span>
-              <input required minLength={10} type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} />
+              <span>Nuova password (min. 12 caratteri)</span>
+              <input required minLength={12} type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} />
             </label>
             <label>
               <span>Ripeti la nuova password</span>
-              <input required minLength={10} type="password" autoComplete="new-password" value={repeat} onChange={(e) => setRepeat(e.target.value)} />
+              <input required minLength={12} type="password" autoComplete="new-password" value={repeat} onChange={(e) => setRepeat(e.target.value)} />
             </label>
           </div>
           {done && <p className="form-ok">Password cambiata. Le sessioni aperte sugli altri dispositivi sono state chiuse.</p>}
@@ -3667,6 +4083,23 @@ function ProfileModal({ user, onClose }: { user: SessionUser; onClose: () => voi
             </Button>
           </div>
         </form>
+        <TwoFactorSection user={user} onChanged={(enabled) => onUserChange({ ...user, totp_enabled: enabled })} />
+        <p className="profile-section">Sessioni</p>
+        <div className="mfa-box">
+          <p className="muted">Chiude l'accesso su tutti gli altri dispositivi e browser. Questo resta collegato.</p>
+          {loggedOutOthers && <p className="form-ok flush">Fatto: gli altri dispositivi sono stati scollegati.</p>}
+          <div className="modal-actions flush">
+            <Button
+              className="secondary-button"
+              onClick={async () => {
+                await logoutAll().catch(() => {})
+                setLoggedOutOthers(true)
+              }}
+            >
+              Esci da tutti gli altri dispositivi
+            </Button>
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -4038,6 +4471,20 @@ const auditLabels: Record<string, string> = {
   password_reimpostata: "Password reimpostata",
   password_cambiata: "Password cambiata",
   password_recuperata: "Password recuperata (emergenza)",
+  login_fallito: "Accesso fallito",
+  login_bloccato: "Accesso bloccato (troppi tentativi)",
+  login_2fa_fallito: "Codice 2FA errato",
+  codice_recupero_usato: "Codice di recupero 2FA usato",
+  recupero_fallito: "Recupero amministratore fallito",
+  riautenticazione: "Password riconfermata",
+  riautenticazione_fallita: "Riconferma password fallita",
+  sessioni_chiuse: "Sessioni chiuse su tutti i dispositivi",
+  "2fa_attivata": "2FA attivata",
+  "2fa_disattivata": "2FA disattivata",
+  "2fa_reimpostata": "2FA reimpostata da un amministratore",
+  codici_recupero_rigenerati: "Codici di recupero 2FA rigenerati",
+  cliente_consultato: "Scheda cliente consultata",
+  report_lead_consultato: "Report lead consultato",
   cliente_creato: "Cliente creato",
   cliente_modificato: "Cliente modificato",
   stato_cliente_cambiato: "Stato cliente cambiato",
@@ -4871,6 +5318,17 @@ function MainApp() {
       />
     )
 
+  if (user.mfa_setup_required && !user.totp_enabled)
+    return (
+      <MfaSetupPage
+        onDone={() => setUser({ ...user, totp_enabled: true, mfa_setup_required: false })}
+        onLogout={async () => {
+          await logout().catch(() => {})
+          setUser(null)
+        }}
+      />
+    )
+
   const can = (keys: string[]) => keys.some((key) => user.permissions.includes(key))
   const allowed = (label: string) =>
     !requiredPermissions[label] || can(requiredPermissions[label])
@@ -5088,7 +5546,8 @@ function MainApp() {
           }}
         />
       )}
-      {showProfile && <ProfileModal user={user} onClose={() => setShowProfile(false)} />}
+      {showProfile && <ProfileModal user={user} onClose={() => setShowProfile(false)} onUserChange={setUser} />}
+      <ReauthModal />
     </div>
   )
 }

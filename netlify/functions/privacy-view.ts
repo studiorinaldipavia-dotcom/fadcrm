@@ -29,4 +29,4 @@ export const handler = route("POST", async (event) => {
       contact,
     }),
   });
-});
+}, { limit: { name: "privview", max: 30, windowSec: 60 } });

@@ -1,4 +1,5 @@
 import { json, logAudit, parseBody, requireUser, route, sql } from "./_shared/auth";
+import { requireSudo } from "./_shared/security";
 
 const slug = (label: string) =>
   label
@@ -14,6 +15,8 @@ export const handler = route("POST", async (event) => {
   const auth = await requireUser(event, ["roles.manage"]);
   if ("response" in auth) return auth.response;
   const { user } = auth;
+  const denied = requireSudo(event, user);
+  if (denied) return denied;
 
   const body = parseBody(event);
   const action = String(body.action ?? "");

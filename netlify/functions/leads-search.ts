@@ -1,4 +1,4 @@
-import { json, requireUser, route, sql } from "./_shared/auth";
+import { rateLimit, json, requireUser, route, sql } from "./_shared/auth";
 
 // Ricerca tra i lead dell'agente (chiamati e da chiamare): per numero (anche le ultime cifre, minimo 3)
 // oppure per nome/cognome (minimo 2 lettere). Al massimo 8 risultati, solo i SUOI contatti.
@@ -7,6 +7,7 @@ import { json, requireUser, route, sql } from "./_shared/auth";
 export const handler = route("GET", async (event) => {
   const auth = await requireUser(event, ["leads.work"]);
   if ("response" in auth) return auth.response;
+  if (!(await rateLimit(`leadsearch:${auth.user.id}`, 120, 60))) return json(429, { error: "Troppe richieste. Riprova tra un minuto." });
   const { user } = auth;
 
   const text = String(event.queryStringParameters?.q ?? "").trim().slice(0, 60);

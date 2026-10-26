@@ -8,7 +8,7 @@ export const handler = route("GET", async (event) => {
   const agents = await sql`
     SELECT u.id, u.email, u.first_name, u.last_name, u.phone, u.office_id, o.name AS office_name,
            u.role::text AS role, u.status::text AS status, u.hire_date::text AS hire_date,
-           u.must_change_password
+           u.must_change_password, u.totp_enabled
     FROM users u LEFT JOIN offices o ON o.id = u.office_id
     ORDER BY (u.role = 'amministratore') DESC, u.first_name, u.last_name`;
   const offices = await sql`SELECT id, name FROM offices ORDER BY name`;

@@ -132,6 +132,7 @@ export function parseBody(event: HandlerEvent): Record<string, any> {
 export function route(
   method: "GET" | "POST" | ("GET" | "POST")[],
   fn: (event: HandlerEvent) => Promise<HandlerResponse>,
+  options: { limit?: { name: string; max: number; windowSec: number } } = {},
 ): Handler {
   const allowed = Array.isArray(method) ? method : [method];
   return async (event) => {
@@ -149,8 +150,18 @@ export function route(
         }
         if (originHost !== host) return json(403, { error: "Richiesta non consentita" });
       }
+      // Un altro sito non puo' aggiungere questo header senza il nostro consenso (il browser blocca la richiesta)
+      if (event.headers["x-requested-with"] !== "fad-leadhub") return json(403, { error: "Richiesta non consentita" });
+      const fetchSite = event.headers["sec-fetch-site"];
+      if (fetchSite && fetchSite !== "same-origin" && fetchSite !== "none") return json(403, { error: "Richiesta non consentita" });
     }
     try {
+      if (options.limit) {
+        const { name, max, windowSec } = options.limit;
+        if (!(await rateLimit(`${name}:${clientIp(event)}`, max, windowSec))) {
+          return json(429, { error: "Troppe richieste. Riprova tra qualche minuto." });
+        }
+      }
       return await fn(event);
     } catch (error) {
       console.error(error);
@@ -186,13 +197,16 @@ export type SessionUser = {
   photo_url: string | null;
   must_change_password: boolean;
   session_version: number;
+  totp_enabled: boolean;
+  mfa_required: boolean;
+  mfa_setup_required: boolean;
   permissions: string[];
 };
 
 export async function loadSessionUser(userId: string): Promise<SessionUser | null> {
   const rows = await sql`
     SELECT u.id, u.email, u.first_name, u.last_name, u.role::text AS role, coalesce(r.label, u.role) AS role_label,
-           u.status::text AS status, u.theme, u.office_id, u.photo_url, u.must_change_password, u.session_version
+           u.status::text AS status, u.theme, u.office_id, u.photo_url, u.must_change_password, u.session_version, u.totp_enabled
     FROM users u LEFT JOIN roles r ON r.key = u.role WHERE u.id = ${userId}
   `;
   const u = rows[0];
@@ -210,6 +224,7 @@ export async function loadSessionUser(userId: string): Promise<SessionUser | nul
     else perms.delete(o.permission_key as string);
   }
 
+  const permissions = [...perms].sort();
   return {
     id: u.id,
     email: u.email,
@@ -222,8 +237,63 @@ export async function loadSessionUser(userId: string): Promise<SessionUser | nul
     photo_url: u.photo_url,
     must_change_password: u.must_change_password,
     session_version: u.session_version,
-    permissions: [...perms].sort(),
+    totp_enabled: u.totp_enabled === true,
+    mfa_required: mfaRequired(u.role, permissions),
+    mfa_setup_required: u.totp_enabled !== true && mfaRequired(u.role, permissions),
+    permissions,
   };
+}
+
+/* ---------- Politica di sicurezza degli account ---------- */
+
+const PRIVILEGED_PERMISSIONS = ["roles.manage", "agents.manage", "agents.delete", "customers.delete"];
+
+/** Account che possono cambiare permessi, utenti o cancellare dati: sessioni piu' corte e 2FA obbligatoria */
+export function isPrivileged(user: { permissions: string[] }): boolean {
+  return user.permissions.some((p) => PRIVILEGED_PERMISSIONS.includes(p));
+}
+
+// MFA_REQUIRED su Netlify: "privileged" (predefinito: account con permessi alti), "all" (tutti) oppure "off"
+function mfaRequired(role: string, permissions: string[]): boolean {
+  const mode = (process.env.MFA_REQUIRED || "privileged").toLowerCase();
+  if (mode === "off") return false;
+  if (mode === "all") return true;
+  return role === "amministratore" || isPrivileged({ permissions });
+}
+
+/* ---------- Limite di richieste ---------- */
+
+/** Ritorna false se la chiave ha superato "max" richieste nella finestra. Se il database non risponde non blocca nessuno. */
+export async function rateLimit(key: string, max: number, windowSec: number): Promise<boolean> {
+  try {
+    const bucket = Math.floor(Date.now() / 1000 / windowSec);
+    const rows = await sql`
+      INSERT INTO rate_limits (key, bucket, count) VALUES (${key}, ${bucket}, 1)
+      ON CONFLICT (key, bucket) DO UPDATE SET count = rate_limits.count + 1
+      RETURNING count`;
+    if (Math.random() < 0.02) await sql`DELETE FROM rate_limits WHERE bucket < ${bucket - 2}`;
+    return rows[0].count <= max;
+  } catch (error) {
+    console.error("rateLimit:", error);
+    return true;
+  }
+}
+
+/** Registra l'evento solo se lo stesso utente non l'ha gia' generato negli ultimi minuti (evita registri enormi) */
+export async function logAuditOnce(
+  actorId: string,
+  action: string,
+  entity: string,
+  entityId: string | null,
+  minutes = 10,
+  details: Record<string, unknown> = {},
+) {
+  const recent = await sql`
+    SELECT 1 FROM audit_logs
+    WHERE actor_id = ${actorId} AND action = ${action} AND entity = ${entity}
+      AND entity_id IS NOT DISTINCT FROM ${entityId}::uuid
+      AND created_at > now() - make_interval(mins => ${minutes}) LIMIT 1`;
+  if (recent.length === 0) await logAudit(actorId, action, entity, entityId, details);
 }
 
 export async function getSessionUser(event: HandlerEvent): Promise<SessionUser | null> {
@@ -244,6 +314,10 @@ export async function requireUser(
 ): Promise<{ user: SessionUser } | { response: HandlerResponse }> {
   const user = await getSessionUser(event);
   if (!user) return { response: json(401, { error: "Accesso richiesto" }) };
+  // Chi deve ancora attivare la 2FA puo' fare solo quello (e uscire / cambiare password)
+  if (user.mfa_setup_required && !/\/(auth-2fa[a-z-]*|auth-logout|auth-change-password)$/.test(event.path)) {
+    return { response: json(403, { error: "Attiva la verifica in due passaggi per continuare", code: "mfa_setup_required" }) };
+  }
   if (anyOf && !anyOf.some((p) => user.permissions.includes(p))) {
     return { response: json(403, { error: "Non hai il permesso per questa operazione" }) };
   }

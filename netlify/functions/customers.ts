@@ -1,9 +1,10 @@
-import { json, requireUser, route, sql } from "./_shared/auth";
+import { rateLimit, json, requireUser, route, sql } from "./_shared/auth";
 
 // Elenco clienti: chi ha "customers.view_all" li vede tutti, gli altri solo i propri
 export const handler = route("GET", async (event) => {
   const auth = await requireUser(event, ["customers.view_all", "customers.view_own"]);
   if ("response" in auth) return auth.response;
+  if (!(await rateLimit(`customers:${auth.user.id}`, 120, 60))) return json(429, { error: "Troppe richieste. Riprova tra un minuto." });
   const { user } = auth;
 
   const rows = user.permissions.includes("customers.view_all")

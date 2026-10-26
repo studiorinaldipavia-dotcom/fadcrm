@@ -103,4 +103,4 @@ export const handler = route("POST", async (event) => {
       WHERE id = ${request.id}`;
     throw error;
   }
-});
+}, { limit: { name: "privsign", max: 30, windowSec: 60 } });

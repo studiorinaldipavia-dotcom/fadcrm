@@ -27,13 +27,22 @@ export type SessionUser = {
   office_id: string | null;
   photo_url: string | null;
   must_change_password: boolean;
+  totp_enabled?: boolean;
+  mfa_required?: boolean;
+  mfa_setup_required?: boolean;
   permissions: string[];
 };
 
-export async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+// Chiede la password all'utente quando un'azione sensibile lo richiede (registrato dall'app)
+let reauthHandler: (() => Promise<boolean>) | null = null;
+export function setReauthHandler(handler: (() => Promise<boolean>) | null) {
+  reauthHandler = handler;
+}
+
+export async function request<T>(path: string, options: RequestInit = {}, retried = false): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    headers: { "Content-Type": "application/json", "X-Requested-With": "fad-leadhub", ...(options.headers || {}) },
     credentials: "same-origin",
   });
   let data: any = null;
@@ -43,8 +52,12 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
     /* risposta senza contenuto */
   }
   if (!response.ok) {
+    if (response.status === 403 && data?.code === "reauth_required" && reauthHandler && !retried) {
+      if (await reauthHandler()) return request<T>(path, options, true);
+    }
     const error = new Error(data?.error || "Errore di comunicazione con il server");
     (error as any).status = response.status;
+    (error as any).code = data?.code;
     throw error;
   }
   return data as T;
@@ -66,13 +79,42 @@ export async function setupAdmin(input: {
   return request<{ ok: true }>("/auth-setup", { method: "POST", body: JSON.stringify(input) });
 }
 
-export async function login(email: string, password: string, remember: boolean) {
-  const data = await request<{ user: SessionUser }>("/auth-login", {
+export type LoginResult = { user: SessionUser } | { challenge: string };
+
+export async function login(email: string, password: string, remember: boolean): Promise<LoginResult> {
+  const data = await request<{ user?: SessionUser; needs_2fa?: boolean; challenge?: string }>("/auth-login", {
     method: "POST",
     body: JSON.stringify({ email, password, remember }),
   });
+  if (data.needs_2fa && data.challenge) return { challenge: data.challenge };
+  const user = data.user!;
+  if (user.role_label) roleLabels[user.role] = user.role_label
+  return { user };
+}
+
+export async function login2fa(challenge: string, code: string): Promise<SessionUser> {
+  const data = await request<{ user: SessionUser }>("/auth-2fa", { method: "POST", body: JSON.stringify({ challenge, code }) });
   if (data.user.role_label) roleLabels[data.user.role] = data.user.role_label
   return data.user;
+}
+
+export async function reauth(password: string) {
+  return request<{ ok: true }>("/auth-reauth", { method: "POST", body: JSON.stringify({ password }) });
+}
+
+export async function logoutAll() {
+  return request<{ ok: true }>("/auth-logout-all", { method: "POST" });
+}
+
+const mfaCall = <T>(payload: Record<string, unknown>) =>
+  request<T>("/auth-2fa-manage", { method: "POST", body: JSON.stringify(payload) });
+export const mfaBegin = () => mfaCall<{ secret: string; uri: string }>({ action: "begin" });
+export const mfaEnable = (code: string) => mfaCall<{ ok: true; codes: string[] }>({ action: "enable", code });
+export const mfaDisable = (code: string) => mfaCall<{ ok: true }>({ action: "disable", code });
+export const mfaNewCodes = (code: string) => mfaCall<{ codes: string[] }>({ action: "new_codes", code });
+
+export async function resetAgent2fa(id: string) {
+  return request<{ ok: true }>("/agents-save", { method: "POST", body: JSON.stringify({ action: "reset_2fa", id }) });
 }
 
 /** Ritorna l'utente collegato, oppure null se non c'e' una sessione valida */
@@ -117,6 +159,7 @@ export type Agent = {
   status: "attivo" | "sospeso";
   hire_date: string | null;
   must_change_password: boolean;
+  totp_enabled?: boolean;
 };
 
 export type AgentsData = {

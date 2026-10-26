@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { hashPassword, json, logAudit, parseBody, route, sql } from "./_shared/auth";
+import { checkPassword } from "./_shared/security";
 
 function sameSecret(a: string, b: string) {
   const x = Buffer.from(a);
@@ -24,7 +25,8 @@ export const handler = route("POST", async (event) => {
   if (!sameSecret(token, expected)) return json(403, { error: "Codice di configurazione non valido" });
   if (!firstName || !lastName) return json(400, { error: "Nome e cognome obbligatori" });
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json(400, { error: "Email non valida" });
-  if (password.length < 10) return json(400, { error: "La password deve avere almeno 10 caratteri" });
+  const weak = await checkPassword(password, String(body.email ?? ""));
+  if (weak) return json(400, { error: weak });
 
   const hash = await hashPassword(password);
   const rows = await sql`

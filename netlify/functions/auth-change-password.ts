@@ -10,6 +10,7 @@ import {
   sql,
   verifyPassword,
 } from "./_shared/auth";
+import { checkPassword } from "./_shared/security";
 
 // Cambio password dell'utente collegato (obbligatorio al primo accesso con password temporanea)
 export const handler = route("POST", async (event) => {
@@ -20,7 +21,8 @@ export const handler = route("POST", async (event) => {
   const currentPassword = String(body.currentPassword ?? "");
   const newPassword = String(body.newPassword ?? "");
 
-  if (newPassword.length < 10) return json(400, { error: "La nuova password deve avere almeno 10 caratteri" });
+  const weak = await checkPassword(newPassword, auth.user.email);
+  if (weak) return json(400, { error: weak });
   if (newPassword === currentPassword) return json(400, { error: "La nuova password deve essere diversa da quella attuale" });
 
   const rows = await sql`SELECT password_hash FROM users WHERE id = ${auth.user.id}`;

@@ -800,3 +800,13 @@ a.primary-button, a.secondary-button { text-decoration: none; }
   .cte-item-actions { justify-content: flex-end; }
   .products-row { grid-template-columns: 1fr 1fr; }
 }
+
+/* Sicurezza: 2FA, sessioni */
+.mfa-box { margin: 0 22px 14px; display: grid; gap: 10px; }
+.mfa-box .muted { margin: 0; font-size: 11px; line-height: 1.5; }
+.mfa-box label { display: grid; gap: 5px; font-size: 11px; font-weight: 700; }
+.mfa-box input:not([type="checkbox"]) { height: 38px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: var(--surface-soft); font-size: 12px; }
+.mfa-secret { font-family: ui-monospace, monospace; letter-spacing: .06em; }
+.recovery-codes { margin: 0; padding: 12px; border: 1px dashed var(--line); border-radius: 10px; background: var(--surface-soft); font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.8; text-align: center; user-select: all; }
+.modal-actions.flush { padding: 0; margin: 0; }
+.muted.pad { margin: 0 22px 14px; }

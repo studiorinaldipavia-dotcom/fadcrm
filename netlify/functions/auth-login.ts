@@ -7,14 +7,11 @@ import {
   logAudit,
   parseBody,
   route,
-  signToken,
-  sessionCookie,
   sql,
   verifyPassword,
   loadSessionUser,
 } from "./_shared/auth";
-
-const DAY = 24 * 60 * 60;
+import { completeLogin, signPurposeToken } from "./_shared/security";
 
 export const handler = route("POST", async (event) => {
   const body = parseBody(event);
@@ -26,11 +23,12 @@ export const handler = route("POST", async (event) => {
 
   const ip = clientIp(event);
   if (await loginBlocked(email, ip)) {
+    await logAudit(null, "login_bloccato", "users", null, { email: email.slice(0, 120), ip });
     return json(429, { error: "Troppi tentativi falliti. Riprova tra 15 minuti." });
   }
 
   const rows = await sql`
-    SELECT id, password_hash, status::text AS status, session_version FROM users WHERE lower(email) = ${email}
+    SELECT id, password_hash, status::text AS status FROM users WHERE lower(email) = ${email}
   `;
   const found = rows[0];
 
@@ -38,17 +36,21 @@ export const handler = route("POST", async (event) => {
   const valid = await verifyPassword(password, found ? found.password_hash : await getDummyHash());
   if (!found || !valid) {
     await recordLogin(email, ip, false);
+    await logAudit(found?.id ?? null, "login_fallito", "users", found?.id ?? null, { email: email.slice(0, 120), ip });
     return json(401, { error: "Email o password non corretti" });
   }
   if (found.status !== "attivo") {
     return json(403, { error: "Account sospeso. Contatta l'amministratore." });
   }
 
-  const ttl = remember ? 30 * DAY : 12 * 60 * 60;
-  const token = signToken(found.id, ttl, found.session_version);
   const user = await loadSessionUser(found.id);
-  await recordLogin(email, ip, true);
-  await logAudit(found.id, "login", "users", found.id);
+  if (!user) return json(403, { error: "Account sospeso. Contatta l'amministratore." });
 
-  return json(200, { user }, { "Set-Cookie": sessionCookie(token, remember ? ttl : undefined) });
-});
+  // Con la 2FA attiva la password da sola non basta: serve il codice dell'app (sfida valida 5 minuti)
+  if (user.totp_enabled) {
+    const challenge = signPurposeToken("2fa", { sub: user.id, remember }, 5 * 60);
+    return json(200, { needs_2fa: true, challenge });
+  }
+
+  return completeLogin(event, user, remember, "password");
+}, { limit: { name: "login", max: 60, windowSec: 60 } });
