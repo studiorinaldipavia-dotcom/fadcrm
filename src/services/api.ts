@@ -801,32 +801,9 @@ export async function sendPrivacy(customerId: string, mode: "email" | "link") {
 
 export const privacyPdfUrl = (id: string) => `${API_BASE_URL}/privacy-open?id=${encodeURIComponent(id)}`;
 
-const fileToBase64 = (file: File) =>
-  new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve((reader.result as string).split(",")[1]);
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-
-export async function uploadSignedPrivacy(input: {
-  customer_id: string;
-  signed_at: string;
-  consent_marketing: boolean;
-  consent_third_parties: boolean;
-  file: File;
-}) {
-  return request<{ id: string }>("/privacy-upload", {
-    method: "POST",
-    body: JSON.stringify({
-      customer_id: input.customer_id,
-      signed_at: input.signed_at,
-      consent_marketing: input.consent_marketing,
-      consent_third_parties: input.consent_third_parties,
-      mimeType: input.file.type,
-      fileBase64: await fileToBase64(input.file),
-    }),
-  });
+// Il click sul bottone "Privacy" segna l'informativa del cliente come firmata
+export async function markPrivacySigned(customerId: string) {
+  return request<{ ok: true }>("/privacy-mark", { method: "POST", body: JSON.stringify({ customer_id: customerId }) });
 }
 
 /* Pagina pubblica di firma (senza login) */

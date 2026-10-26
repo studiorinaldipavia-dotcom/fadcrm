@@ -9,10 +9,9 @@ import {
   addCustomerNote,
   privacyPdfUrl,
   signPrivacy,
-  uploadSignedPrivacy,
+  markPrivacySigned,
   viewPrivacy,
   fetchAudit,
-  fetchDriveStatus,
   fetchOffices,
   fetchProducts,
   recoverAdmin,
@@ -72,7 +71,6 @@ import {
   type AgentsData,
   type PrivacyView,
   type AuditRow,
-  type DriveStatus,
   type OfficeRow,
   type ProductRow,
   type CteRow,
@@ -902,112 +900,10 @@ function CustomerFormModal({
   )
 }
 
-function PrivacyUploadModal({
-  customerId,
-  onClose,
-  onSaved,
-}: {
-  customerId: string
-  onClose: () => void
-  onSaved: () => void
-}) {
-  const [signedAt, setSignedAt] = useState(localIso(new Date()))
-  const [marketing, setMarketing] = useState("")
-  const [third, setThird] = useState("")
-  const [file, setFile] = useState<File | null>(null)
-  const [error, setError] = useState("")
-  const [busy, setBusy] = useState(false)
-
-  const submit = async () => {
-    setError("")
-    if (!file) return setError("Scegli il PDF firmato")
-    if (file.type !== "application/pdf") return setError("Sono ammessi solo file PDF")
-    if (file.size > 4 * 1024 * 1024) return setError("Il PDF deve essere al massimo di 4 MB")
-    if (!marketing || !third) return setError("Indica i due consensi come risultano sul documento")
-    setBusy(true)
-    try {
-      await uploadSignedPrivacy({
-        customer_id: customerId,
-        signed_at: signedAt,
-        consent_marketing: marketing === "si",
-        consent_third_parties: third === "si",
-        file,
-      })
-      onSaved()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Errore imprevisto")
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className="modal-layer" role="presentation" onMouseDown={onClose}>
-      <div className="modal" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="modal-head">
-          <div>
-            <p className="panel-kicker neutral">Privacy</p>
-            <h2>Carica informativa già firmata</h2>
-          </div>
-          <Button className="icon-button" onClick={onClose} title="Chiudi">
-            <Icon name="close" />
-          </Button>
-        </div>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault()
-            submit()
-          }}
-        >
-          <div className="form-grid">
-            <label>
-              <span>Data della firma</span>
-              <input required type="date" max={localIso(new Date())} value={signedAt} onChange={(e) => setSignedAt(e.target.value)} />
-            </label>
-            <label>
-              <span>File PDF firmato</span>
-              <input type="file" accept="application/pdf" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-            </label>
-            <label>
-              <span>Consenso marketing (i)</span>
-              <select required value={marketing} onChange={(e) => setMarketing(e.target.value)}>
-                <option value="">— Scegli —</option>
-                <option value="si">Consento</option>
-                <option value="no">Non consento</option>
-              </select>
-            </label>
-            <label>
-              <span>Cessione a terzi (ii)</span>
-              <select required value={third} onChange={(e) => setThird(e.target.value)}>
-                <option value="">— Scegli —</option>
-                <option value="si">Consento</option>
-                <option value="no">Non consento</option>
-              </select>
-            </label>
-          </div>
-          {error && (
-            <p className="form-error modal-error" role="alert">
-              {error}
-            </p>
-          )}
-          <div className="modal-actions">
-            <Button className="secondary-button" onClick={onClose}>
-              Annulla
-            </Button>
-            <Button className="primary-button" type="submit">
-              {busy ? "Caricamento…" : "Salva documento"}
-            </Button>
-          </div>
-        </form>
-      </div>
-    </div>
-  )
-}
-
 const PRIVACY_APP_URL = "https://app.privaclick.eu/"
 
 function PrivacyPanel({ data, onReload }: { data: CustomerDetailData; onReload: () => void }) {
-  const [message, setMessage] = useState("")
-  const [showUpload, setShowUpload] = useState(false)
+  const [error, setError] = useState("")
 
   const signed = data.privacy.find((p) => p.status === "firmata")
   const pending = data.privacy.find((p) => p.status === "inviata")
@@ -1038,9 +934,19 @@ function PrivacyPanel({ data, onReload }: { data: CustomerDetailData; onReload: 
         {signed ? (
           <p>
             Firmata il <strong>{formatDateTime(signed.signed_at!)}</strong>
-            {signed.method === "caricata" ? " (documento caricato a mano)" : " (conferma digitale)"}.<br />
-            Marketing: <strong>{consent(signed.consent_marketing)}</strong> · Cessione a terzi:{" "}
-            <strong>{consent(signed.consent_third_parties)}</strong>
+            {signed.method === "caricata"
+              ? " (documento caricato a mano)"
+              : signed.consent_marketing === null && signed.consent_third_parties === null
+                ? " (tramite Privaclick)"
+                : " (conferma digitale)"}
+            .
+            {(signed.consent_marketing !== null || signed.consent_third_parties !== null) && (
+              <>
+                <br />
+                Marketing: <strong>{consent(signed.consent_marketing)}</strong> · Cessione a terzi:{" "}
+                <strong>{consent(signed.consent_third_parties)}</strong>
+              </>
+            )}
           </p>
         ) : pending ? (
           <p>
@@ -1051,17 +957,25 @@ function PrivacyPanel({ data, onReload }: { data: CustomerDetailData; onReload: 
         ) : (
           <p className="muted">Nessuna informativa registrata per questo cliente.</p>
         )}
-        {message && <p className="form-ok flush">{message}</p>}
+        {error && <p className="form-error flush">{error}</p>}
         <div className="verify-actions">
           {data.can_edit && (
-            <>
-              <a className="primary-button" href={PRIVACY_APP_URL} target="_blank" rel="noopener noreferrer">
-                Privacy
-              </a>
-              <Button className="secondary-button" onClick={() => setShowUpload(true)}>
-                Carica PDF già firmato
-              </Button>
-            </>
+            // Il click apre Privaclick e, se non è già firmata, segna l'informativa come firmata
+            <a
+              className="primary-button"
+              href={PRIVACY_APP_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={() => {
+                if (signed) return
+                setError("")
+                markPrivacySigned(data.customer.id)
+                  .then(onReload)
+                  .catch((err) => setError(err instanceof Error ? err.message : "Errore imprevisto"))
+              }}
+            >
+              Privacy
+            </a>
           )}
           {signed?.has_pdf && (
             <a className="secondary-button" href={privacyPdfUrl(signed.id)} target="_blank" rel="noopener noreferrer">
@@ -1070,17 +984,6 @@ function PrivacyPanel({ data, onReload }: { data: CustomerDetailData; onReload: 
           )}
         </div>
       </div>
-      {showUpload && (
-        <PrivacyUploadModal
-          customerId={data.customer.id}
-          onClose={() => setShowUpload(false)}
-          onSaved={() => {
-            setShowUpload(false)
-            setMessage("Documento salvato su Google Drive.")
-            onReload()
-          }}
-        />
-      )}
     </article>
   )
 }
@@ -4519,7 +4422,6 @@ function SettingsPage({ user }: { user: SessionUser }) {
   const canSettings = user.permissions.includes("settings.manage")
   const canAudit = user.permissions.includes("audit.view")
   const [offices, setOffices] = useState<OfficeRow[] | null>(null)
-  const [drive, setDrive] = useState<DriveStatus | null>(null)
   const [audit, setAudit] = useState<AuditRow[] | null>(null)
   const [error, setError] = useState("")
   const [officeForm, setOfficeForm] = useState({ name: "", city: "" })
@@ -4529,17 +4431,10 @@ function SettingsPage({ user }: { user: SessionUser }) {
     fetchOffices()
       .then(setOffices)
       .catch((err) => setError(err instanceof Error ? err.message : "Errore imprevisto"))
-  const checkDrive = () => {
-    setDrive(null)
-    fetchDriveStatus()
-      .then(setDrive)
-      .catch((err) => setError(err instanceof Error ? err.message : "Errore imprevisto"))
-  }
 
   useEffect(() => {
     if (canSettings) {
       loadOffices()
-      checkDrive()
     }
     if (canAudit) {
       fetchAudit()
@@ -4619,34 +4514,6 @@ function SettingsPage({ user }: { user: SessionUser }) {
               Aggiungi ufficio
             </Button>
           </form>
-        </section>
-      )}
-
-      {canSettings && (
-        <section className="panel standalone-panel">
-          <div className="panel-heading">
-            <div>
-              <p className="panel-kicker neutral">Documenti</p>
-              <h2>Google Drive</h2>
-            </div>
-            <Button className="secondary-button" onClick={checkDrive}>
-              Verifica collegamento
-            </Button>
-          </div>
-          <div className="drive-status">
-            {!drive && <p className="muted">Controllo in corso…</p>}
-            {drive && drive.ok && (
-              <p className="form-ok flush">
-                Collegato. Cartella aziendale: <strong>{drive.folder_name}</strong> ({drive.mode}).
-              </p>
-            )}
-            {drive && !drive.ok && !drive.configured && (
-              <p className="form-error flush">
-                Non configurato. Su Netlify mancano le variabili: {drive.missing?.join(", ")}.
-              </p>
-            )}
-            {drive && !drive.ok && drive.configured && <p className="form-error flush">{drive.message}</p>}
-          </div>
         </section>
       )}
 
