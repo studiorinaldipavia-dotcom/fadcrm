@@ -515,6 +515,19 @@ export type DashboardData = {
   }[];
   attention: { key: string; title: string; detail: string; tone: string; icon: string; target: string }[];
   coaching: CoachingData | null;
+  ctes: DashboardCte[];
+};
+
+export type DashboardCte = {
+  id: string;
+  product_name: string;
+  product_category: string | null;
+  title: string;
+  cost: number | null;
+  fixed_cost: number | null;
+  kwh_cost: number | null;
+  smc_cost: number | null;
+  notes: string | null;
 };
 
 export async function fetchDashboard(range: "week" | "month" | "quarter"): Promise<DashboardData> {
@@ -637,7 +650,42 @@ export type ProductRow = {
   is_active: boolean;
   sort_order: number;
   customers: number;
+  ctes: CteRow[];
 };
+
+export type CteRow = {
+  id: string;
+  title: string;
+  cost: number | null;
+  fixed_cost: number | null;
+  kwh_cost: number | null;
+  smc_cost: number | null;
+  notes: string | null;
+  is_active: boolean;
+  sort_order: number;
+};
+
+export type CteInput = {
+  title: string;
+  cost: string;
+  fixed_cost: string;
+  kwh_cost: string;
+  smc_cost: string;
+  notes: string;
+  is_active: boolean;
+  sort_order: number;
+};
+
+export async function saveCte(input: CteInput, target: { productId: string } | { id: string }) {
+  return request<{ ok?: true; id?: string }>("/ctes-save", {
+    method: "POST",
+    body: JSON.stringify("id" in target ? { action: "update", id: target.id, ...input } : { action: "create", product_id: target.productId, ...input }),
+  });
+}
+
+export async function deleteCte(id: string) {
+  return request<{ ok: true }>("/ctes-save", { method: "POST", body: JSON.stringify({ action: "delete", id }) });
+}
 
 export type ProductInput = {
   name: string;

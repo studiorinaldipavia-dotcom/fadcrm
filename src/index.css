@@ -599,7 +599,8 @@ h1 { margin: 0; font-size: 29px; line-height: 1.25; letter-spacing: -.8px; }
 .profile-section { margin: 14px 22px 8px; font-size: 11px; font-weight: 800; }
 .check-field { flex-direction: row !important; align-items: center; gap: 8px !important; }
 .check-field input { width: auto !important; height: auto !important; }
-.products-row { grid-template-columns: 1.8fr 1fr .6fr .8fr auto; }
+.products-row { grid-template-columns: 1.8fr 1fr .6fr 1fr .8fr auto; }
+a.primary-button, a.secondary-button { text-decoration: none; }
 .cell-note { display: block; margin-top: 2px; color: var(--ink-faint); font-size: 9px; }
 .audit-row { grid-template-columns: 1fr 1fr 1.2fr 1.6fr; }
 .audit-row span, .audit-row strong { overflow-wrap: anywhere; }
@@ -775,3 +776,27 @@ h1 { margin: 0; font-size: 29px; line-height: 1.25; letter-spacing: -.8px; }
 .task-overdue { color: var(--red); font-weight: 700; }
 .field-caption { display: block; margin-bottom: 6px; color: var(--ink-soft); font-size: 11px; font-weight: 600; }
 .doc-row.clickable { cursor: pointer; }
+
+/* CTE dei prodotti */
+.cte-list { max-height: 60vh; overflow-y: auto; }
+.cte-item { padding: 13px 22px; display: flex; align-items: center; justify-content: space-between; gap: 14px; border-bottom: 1px solid var(--line); }
+.cte-item:last-child { border-bottom: 0; }
+.cte-item-main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.cte-item-main strong { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.cte-item-main small { color: var(--ink-faint); font-size: 10px; overflow-wrap: anywhere; }
+.cte-item-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.cte-groups { padding: 6px 20px 18px; display: grid; gap: 16px; }
+.cte-group h3 { margin: 12px 0 8px; font-size: 12px; font-weight: 800; }
+.cte-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+.cte-card { padding: 13px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); }
+.cte-card strong { display: block; margin-bottom: 8px; font-size: 12px; }
+.cte-card dl { margin: 0; display: grid; gap: 4px; }
+.cte-card dl > div { display: flex; justify-content: space-between; gap: 10px; font-size: 10px; }
+.cte-card dt { color: var(--ink-faint); font-weight: 700; }
+.cte-card dd { margin: 0; font-weight: 700; text-align: right; }
+.cte-card p { margin: 9px 0 0; color: var(--ink-soft); font-size: 10px; line-height: 1.5; white-space: pre-wrap; }
+@media (max-width: 720px) {
+  .cte-item { flex-direction: column; align-items: stretch; }
+  .cte-item-actions { justify-content: flex-end; }
+  .products-row { grid-template-columns: 1fr 1fr; }
+}

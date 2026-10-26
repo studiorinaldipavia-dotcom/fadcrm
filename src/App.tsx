@@ -8,7 +8,6 @@ import {
   roleLabels,
   addCustomerNote,
   privacyPdfUrl,
-  sendPrivacy,
   signPrivacy,
   uploadSignedPrivacy,
   viewPrivacy,
@@ -19,6 +18,8 @@ import {
   recoverAdmin,
   saveOffice,
   saveProduct,
+  saveCte,
+  deleteCte,
   createCalendarEvent,
   deleteCalendarEvent,
   fetchCalendar,
@@ -65,6 +66,8 @@ import {
   type DriveStatus,
   type OfficeRow,
   type ProductRow,
+  type CteRow,
+  type DashboardCte,
   type CalendarData,
   type CalendarEvent,
   type MapData,
@@ -385,7 +388,7 @@ function LoginPage({ onLoggedIn }: { onLoggedIn: (user: SessionUser) => void }) 
           <img className="brand-logo" src="/logo-fad-white.png" alt="FAD LeadHub" />
           <div>
             <p className="brand-name">FAD LeadHub</p>
-            <p className="brand-subtitle">CRM aziendale</p>
+            <p className="brand-subtitle">Lead &amp; clienti</p>
           </div>
         </div>
         <div className="login-statement">
@@ -419,7 +422,7 @@ function LoginPage({ onLoggedIn }: { onLoggedIn: (user: SessionUser) => void }) 
               ? "Nessun utente è ancora presente. Crea l'account dell'amministratore."
               : isRecovery
                 ? "Serve il codice RECOVERY_TOKEN impostato su Netlify. Vale solo per gli amministratori."
-                : "Inserisci le tue credenziali per accedere al CRM."}
+                : "Inserisci le tue credenziali per accedere a FAD LeadHub."}
           </p>
           {mode === "loading" ? (
             <p className="login-intro">Caricamento…</p>
@@ -532,7 +535,7 @@ function LoginPage({ onLoggedIn }: { onLoggedIn: (user: SessionUser) => void }) 
                     ? "Crea amministratore e accedi"
                     : isRecovery
                       ? "Reimposta password"
-                      : "Accedi al CRM"}{" "}
+                      : "Accedi a FAD LeadHub"}{" "}
                 <Icon name="arrow" size={17} />
               </Button>
             </form>
@@ -616,7 +619,6 @@ function CustomerFormModal({
   })
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
-  const [sendNow, setSendNow] = useState(false)
 
   useEffect(() => {
     fetchCustomerMeta()
@@ -651,15 +653,6 @@ function CustomerFormModal({
     try {
       if (isNew) {
         const result = await createCustomer(form)
-        if (sendNow) {
-          try {
-            await sendPrivacy(result.id, "email")
-          } catch (err) {
-            window.alert(
-              `Cliente creato, ma l'informativa privacy non è stata inviata: ${err instanceof Error ? err.message : "errore"}.\nPuoi inviarla dalla scheda del cliente.`,
-            )
-          }
-        }
         onSaved(result.id)
       } else {
         await updateCustomer(customer!.id, form)
@@ -804,12 +797,6 @@ function CustomerFormModal({
               </label>
             )}
             {isNew && (
-              <label className="check-field full">
-                <input type="checkbox" checked={sendNow} onChange={(e) => setSendNow(e.target.checked)} />
-                <span>Invia subito al cliente l'informativa privacy da firmare (servono email e codice fiscale)</span>
-              </label>
-            )}
-            {isNew && (
               <label className="full">
                 <span>Nota iniziale (facoltativa)</span>
                 <textarea
@@ -941,42 +928,15 @@ function PrivacyUploadModal({
   )
 }
 
+const PRIVACY_APP_URL = "https://app.privaclick.eu/"
+
 function PrivacyPanel({ data, onReload }: { data: CustomerDetailData; onReload: () => void }) {
-  const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState("")
-  const [error, setError] = useState("")
-  const [link, setLink] = useState("")
   const [showUpload, setShowUpload] = useState(false)
 
   const signed = data.privacy.find((p) => p.status === "firmata")
   const pending = data.privacy.find((p) => p.status === "inviata")
   const consent = (value: boolean | null) => (value === null ? "—" : value ? "Consente" : "Non consente")
-
-  const send = async (mode: "email" | "link") => {
-    setError("")
-    setMessage("")
-    setBusy(true)
-    try {
-      const result = await sendPrivacy(data.customer.id, mode)
-      if (mode === "email") {
-        setLink("")
-        setMessage(`Informativa inviata a ${result.email}.`)
-      } else {
-        setLink(result.link)
-        try {
-          await navigator.clipboard.writeText(result.link)
-          setMessage("Link copiato. Invialo al cliente (per esempio su WhatsApp).")
-        } catch {
-          setMessage("Link generato: copialo dal campo qui sotto.")
-        }
-      }
-      onReload()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Errore imprevisto")
-    } finally {
-      setBusy(false)
-    }
-  }
 
   return (
     <article className="panel">
@@ -1014,20 +974,15 @@ function PrivacyPanel({ data, onReload }: { data: CustomerDetailData; onReload: 
             {pending.expires_at && !pending.expired ? ` · scade il ${formatDate(pending.expires_at)}` : ""}.
           </p>
         ) : (
-          <p className="muted">L'informativa non è ancora stata inviata a questo cliente.</p>
+          <p className="muted">Nessuna informativa registrata per questo cliente.</p>
         )}
         {message && <p className="form-ok flush">{message}</p>}
-        {error && <p className="form-error flush">{error}</p>}
-        {link && <input className="link-field" readOnly value={link} onFocus={(e) => e.currentTarget.select()} />}
         <div className="verify-actions">
           {data.can_edit && (
             <>
-              <Button className="primary-button" onClick={() => send("email")}>
-                {busy ? "Attendi…" : signed ? "Invia di nuovo per email" : "Invia per email"}
-              </Button>
-              <Button className="secondary-button" onClick={() => send("link")}>
-                Copia link di firma
-              </Button>
+              <a className="primary-button" href={PRIVACY_APP_URL} target="_blank" rel="noopener noreferrer">
+                Privacy
+              </a>
               <Button className="secondary-button" onClick={() => setShowUpload(true)}>
                 Carica PDF già firmato
               </Button>
@@ -2776,6 +2731,47 @@ function PerformancePage({ user }: { user: SessionUser }) {
   )
 }
 
+function CtePanel({ ctes }: { ctes: DashboardCte[] }) {
+  const groups = ctes.reduce<Record<string, DashboardCte[]>>((acc, cte) => {
+    ;(acc[cte.product_name] ??= []).push(cte)
+    return acc
+  }, {})
+
+  return (
+    <section className="panel cte-panel">
+      <div className="panel-heading">
+        <div>
+          <p className="panel-kicker neutral">Prodotti</p>
+          <h2>CTE · condizioni tecnico-economiche</h2>
+        </div>
+      </div>
+      <div className="cte-groups">
+        {Object.entries(groups).map(([product, items]) => (
+          <div className="cte-group" key={product}>
+            <h3>{product}</h3>
+            <div className="cte-cards">
+              {items.map((cte) => (
+                <article className="cte-card" key={cte.id}>
+                  <strong>{cte.title}</strong>
+                  <dl>
+                    {cteCosts(cte).map((c) => (
+                      <div key={c.label}>
+                        <dt>{c.label}</dt>
+                        <dd>{c.value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                  {cte.notes && <p>{cte.notes}</p>}
+                </article>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 function DashboardPage({
   range,
   user,
@@ -2938,6 +2934,8 @@ function DashboardPage({
           </article>
         )}
       </section>
+
+      {data.ctes.length > 0 && <CtePanel ctes={data.ctes} />}
 
       {canTasks && (
         <section className="panel contracts-panel">
@@ -3674,6 +3672,186 @@ function ProfileModal({ user, onClose }: { user: SessionUser; onClose: () => voi
   )
 }
 
+const euro = (value: number, decimals: number) =>
+  value.toLocaleString("it-IT", { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
+
+// Elenco dei costi valorizzati di una CTE, nell'ordine: costo, fisso, kWh, Smc
+function cteCosts(cte: { cost: number | null; fixed_cost: number | null; kwh_cost: number | null; smc_cost: number | null }) {
+  const items: { label: string; value: string }[] = []
+  if (cte.cost !== null) items.push({ label: "Costo", value: `${euro(cte.cost, 2)} €` })
+  if (cte.fixed_cost !== null) items.push({ label: "Costo fisso", value: `${euro(cte.fixed_cost, 2)} €` })
+  if (cte.kwh_cost !== null) items.push({ label: "Costo al kWh", value: `${euro(cte.kwh_cost, 6)} €/kWh` })
+  if (cte.smc_cost !== null) items.push({ label: "Costo allo Smc", value: `${euro(cte.smc_cost, 6)} €/Smc` })
+  return items
+}
+
+const emptyCteForm = (cte?: CteRow) => ({
+  title: cte?.title ?? "",
+  cost: cte?.cost?.toString().replace(".", ",") ?? "",
+  fixed_cost: cte?.fixed_cost?.toString().replace(".", ",") ?? "",
+  kwh_cost: cte?.kwh_cost?.toString().replace(".", ",") ?? "",
+  smc_cost: cte?.smc_cost?.toString().replace(".", ",") ?? "",
+  notes: cte?.notes ?? "",
+  sort_order: String(cte?.sort_order ?? 0),
+  is_active: cte?.is_active ?? true,
+})
+
+function CteModal({ product, onClose, onChanged }: { product: ProductRow; onClose: () => void; onChanged: () => void }) {
+  const [editing, setEditing] = useState<CteRow | "new" | null>(null)
+  const [form, setForm] = useState(emptyCteForm())
+  const [error, setError] = useState("")
+  const [busy, setBusy] = useState(false)
+
+  const open = (target: CteRow | "new") => {
+    setEditing(target)
+    setForm(emptyCteForm(target === "new" ? undefined : target))
+    setError("")
+  }
+
+  const submit = async () => {
+    if (!editing) return
+    setError("")
+    setBusy(true)
+    try {
+      const input = { ...form, sort_order: Number(form.sort_order) || 0 }
+      await saveCte(input, editing === "new" ? { productId: product.id } : { id: editing.id })
+      setEditing(null)
+      onChanged()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Errore imprevisto")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const remove = async (cte: CteRow) => {
+    if (!window.confirm(`Eliminare la CTE «${cte.title}»?`)) return
+    setError("")
+    try {
+      await deleteCte(cte.id)
+      onChanged()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Errore imprevisto")
+    }
+  }
+
+  const set = (key: keyof typeof form, value: string) => setForm((current) => ({ ...current, [key]: value }))
+
+  return (
+    <div className="modal-layer" role="presentation" onMouseDown={onClose}>
+      <div className="modal wide" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <div>
+            <p className="panel-kicker neutral">CTE · {product.name}</p>
+            <h2>Condizioni tecnico-economiche</h2>
+          </div>
+          <Button className="icon-button" onClick={onClose} title="Chiudi">
+            <Icon name="close" />
+          </Button>
+        </div>
+
+        {editing ? (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              submit()
+            }}
+          >
+            <div className="form-grid">
+              <label className="full">
+                <span>Titolo</span>
+                <input required maxLength={80} placeholder="Es. Offerta Luce Fissa 12 mesi" value={form.title} onChange={(e) => set("title", e.target.value)} />
+              </label>
+              <label>
+                <span>Costo (€)</span>
+                <input inputMode="decimal" placeholder="0,00" value={form.cost} onChange={(e) => set("cost", e.target.value)} />
+              </label>
+              <label>
+                <span>Costo fisso (€)</span>
+                <input inputMode="decimal" placeholder="0,00" value={form.fixed_cost} onChange={(e) => set("fixed_cost", e.target.value)} />
+              </label>
+              <label>
+                <span>Costo al kWh (€/kWh)</span>
+                <input inputMode="decimal" placeholder="0,123456" value={form.kwh_cost} onChange={(e) => set("kwh_cost", e.target.value)} />
+              </label>
+              <label>
+                <span>Costo allo Smc (€/Smc)</span>
+                <input inputMode="decimal" placeholder="0,123456" value={form.smc_cost} onChange={(e) => set("smc_cost", e.target.value)} />
+              </label>
+              <label className="full">
+                <span>Note</span>
+                <textarea rows={3} maxLength={1000} value={form.notes} onChange={(e) => set("notes", e.target.value)} />
+              </label>
+              <label>
+                <span>Ordine nell'elenco</span>
+                <input type="number" min={0} max={999} value={form.sort_order} onChange={(e) => set("sort_order", e.target.value)} />
+              </label>
+              <label className="check-field">
+                <input type="checkbox" checked={form.is_active} onChange={(e) => setForm({ ...form, is_active: e.target.checked })} />
+                <span>Visibile in dashboard</span>
+              </label>
+            </div>
+            {error && (
+              <p className="form-error modal-error" role="alert">
+                {error}
+              </p>
+            )}
+            <div className="modal-actions">
+              <Button className="secondary-button" onClick={() => setEditing(null)}>
+                Indietro
+              </Button>
+              <Button className="primary-button" type="submit">
+                {busy ? "Attendi…" : "Salva CTE"}
+              </Button>
+            </div>
+          </form>
+        ) : (
+          <>
+            <div className="cte-list">
+              {product.ctes.length === 0 && <p className="muted pad">Nessuna CTE per questo prodotto.</p>}
+              {product.ctes.map((cte) => (
+                <div className="cte-item" key={cte.id}>
+                  <div className="cte-item-main">
+                    <strong>
+                      {cte.title}
+                      {!cte.is_active && <span className="status ko"><i /> Nascosta</span>}
+                    </strong>
+                    <small>
+                      {cteCosts(cte).map((c) => `${c.label}: ${c.value}`).join(" · ") || "Nessun costo indicato"}
+                    </small>
+                    {cte.notes && <small>{cte.notes}</small>}
+                  </div>
+                  <div className="cte-item-actions">
+                    <Button className="secondary-button" onClick={() => open(cte)}>
+                      Modifica
+                    </Button>
+                    <Button className="secondary-button danger-outline" onClick={() => remove(cte)}>
+                      Elimina
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {error && (
+              <p className="form-error modal-error" role="alert">
+                {error}
+              </p>
+            )}
+            <div className="modal-actions">
+              <Button className="secondary-button" onClick={onClose}>
+                Chiudi
+              </Button>
+              <Button className="primary-button" onClick={() => open("new")}>
+                <Icon name="plus" size={18} /> Nuova CTE
+              </Button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function ProductModal({
   product,
   onClose,
@@ -3768,6 +3946,7 @@ function ProductsPage() {
   const [rows, setRows] = useState<ProductRow[] | null>(null)
   const [error, setError] = useState("")
   const [editing, setEditing] = useState<ProductRow | "new" | null>(null)
+  const [cteFor, setCteFor] = useState<string | null>(null)
 
   const load = () =>
     fetchProducts()
@@ -3801,6 +3980,7 @@ function ProductsPage() {
               <span>Prodotto</span>
               <span>Categoria</span>
               <span>Clienti</span>
+              <span>CTE</span>
               <span>Stato</span>
               <span />
             </div>
@@ -3812,6 +3992,11 @@ function ProductsPage() {
                 </span>
                 <span>{row.category ?? "—"}</span>
                 <span>{row.customers}</span>
+                <span>
+                  <button type="button" className="link-button" onClick={() => setCteFor(row.id)}>
+                    {row.ctes.length > 0 ? `${row.ctes.length} CTE · gestisci` : "+ Aggiungi CTE"}
+                  </button>
+                </span>
                 <span className={`status ${row.is_active ? "ok" : "ko"}`}>
                   <i /> {row.is_active ? "Attivo" : "Disattivato"}
                 </span>
@@ -3823,6 +4008,9 @@ function ProductsPage() {
           </div>
         </div>
       </section>
+      {cteFor && rows.find((r) => r.id === cteFor) && (
+        <CteModal product={rows.find((r) => r.id === cteFor)!} onClose={() => setCteFor(null)} onChanged={load} />
+      )}
       {editing && (
         <ProductModal
           key={editing === "new" ? "new" : editing.id}
@@ -3867,6 +4055,9 @@ const auditLabels: Record<string, string> = {
   clienti_geolocalizzati: "Clienti posizionati sulla mappa",
   prodotto_creato: "Prodotto creato",
   prodotto_modificato: "Prodotto modificato",
+  cte_creata: "CTE creata",
+  cte_modificata: "CTE modificata",
+  cte_eliminata: "CTE eliminata",
   ufficio_creato: "Ufficio creato",
   ufficio_modificato: "Ufficio modificato",
 }
@@ -4724,7 +4915,7 @@ function MainApp() {
           <img className="brand-logo" src="/logo-fad-white.png" alt="FAD LeadHub" />
           <div>
             <p className="brand-name">FAD LeadHub</p>
-            <p className="brand-subtitle">CRM aziendale</p>
+            <p className="brand-subtitle">Lead &amp; clienti</p>
           </div>
           <Button
             className="icon-button mobile-close"

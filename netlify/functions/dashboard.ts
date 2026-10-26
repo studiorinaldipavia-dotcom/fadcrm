@@ -143,12 +143,21 @@ export const handler = route("GET", async (event) => {
     }
   }
 
+  // CTE dei prodotti: visibili a tutti gli utenti (le gestisce l'amministratore dalla pagina Prodotti)
+  const ctes = await sql`
+    SELECT t.id, p.name AS product_name, p.category AS product_category, t.title,
+           t.cost::float8 AS cost, t.fixed_cost::float8 AS fixed_cost,
+           t.kwh_cost::float8 AS kwh_cost, t.smc_cost::float8 AS smc_cost, t.notes
+    FROM product_ctes t JOIN products p ON p.id = t.product_id
+    WHERE t.is_active AND p.is_active
+    ORDER BY p.sort_order, p.name, t.sort_order, t.title`;
+
   const coaching = has("stats.coaching") ? await computeCoaching() : null;
 
   return json(200, {
     range, from, to,
     customers, tasks: taskCounts, stats, closing_rate: closingRate,
-    recent, attention, coaching,
+    recent, attention, coaching, ctes,
     // media appuntamenti di oggi tra gli agenti che hanno chiamato: solo trainer, manager e amministratore
     avg_appointments: has("stats.leaderboard") ? await averageAppointmentsToday() : null,
   });
