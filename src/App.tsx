@@ -93,6 +93,7 @@ import {
   type SessionUser,
 } from "./services/api"
 import { CallModePage } from "./leadhub/CallMode"
+import { DialModeSwitch, dialProps, useDialConfig } from "./leadhub/shared"
 import { LeadAgendaPage } from "./leadhub/Agenda"
 import { LeadHubAdminPage } from "./leadhub/Admin"
 
@@ -3986,6 +3987,10 @@ function ProfileModal({ user, onClose, onUserChange }: { user: SessionUser; onCl
             </Button>
           </div>
         </form>
+        <p className="profile-section">Chiamate</p>
+        <div className="mfa-box">
+          <DialModeSwitch />
+        </div>
         <TwoFactorSection user={user} onChanged={(enabled) => onUserChange({ ...user, totp_enabled: enabled })} />
         <p className="profile-section">Sessioni</p>
         <div className="mfa-box">
@@ -4837,6 +4842,7 @@ function TaskCloseModal({
 }
 
 function SecretariatPage({ user, onOpenCustomer }: { user: SessionUser; onOpenCustomer: (id: string) => void }) {
+  useDialConfig()
   const [rows, setRows] = useState<TaskRow[] | null>(null)
   const [canManage, setCanManage] = useState(false)
   const [error, setError] = useState("")
@@ -4901,7 +4907,7 @@ function SecretariatPage({ user, onOpenCustomer }: { user: SessionUser; onOpenCu
             {canManage || !mine ? `Agente: ${row.agent_first_name} ${row.agent_last_name} · ` : ""}
             {row.customer_phone && (
               <>
-                <a href={`tel:${row.customer_phone}`}>{row.customer_phone}</a>
+                <a {...dialProps(row.customer_phone)}>{row.customer_phone}</a>
                 {" · "}
               </>
             )}

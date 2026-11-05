@@ -19,6 +19,10 @@ import {
   OutcomeBadge,
   SessionBadge,
   dateTimeIt,
+  DialModeSwitch,
+  dialProps,
+  setDialConfig,
+  useDialConfig,
   errorText,
   fullName,
   localDateIso,
@@ -308,6 +312,7 @@ type SheetKind = null | "appointment" | "callback"
 
 export function CallModePage({ query, onClearQuery }: { query: string; onClearQuery: () => void }) {
   const online = useOnline()
+  useDialConfig()
   const [data, setData] = useState<QueueData | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState("")
@@ -323,6 +328,9 @@ export function CallModePage({ query, onClearQuery }: { query: string; onClearQu
   const [skipped, setSkipped] = useState<string[]>([])
   const [toast, setToast] = useState<{ text: string; leadId: string } | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const reqId = useRef(0)
+  // dopo un esito, per un attimo i pulsanti ignorano i tocchi: un doppio tocco non deve cadere sul contatto successivo
+  const lockUntil = useRef(0)
 
   // filtro per citta': si ricorda anche se chiudi l'app
   const [cityFilter, setCityFilter] = useState<string[]>(() => {
@@ -335,11 +343,27 @@ export function CallModePage({ query, onClearQuery }: { query: string; onClearQu
   const [cityOpen, setCityOpen] = useState(false)
   const citiesRef = useRef<string[]>(cityFilter)
 
-  const load = useCallback(async (exclude: string[], focus?: string) => {
+  /**
+   * Carica la coda. Con keepCurrent aggiorna solo contatori, citta' e "prossimo contatto"
+   * senza cambiare il contatto che l'agente ha davanti (aggiornamento in sottofondo).
+   */
+  const load = useCallback(async (exclude: string[], focus?: string, keepCurrent = false) => {
+    const mine = ++reqId.current
     setLoadError("")
     try {
-      const next = await fetchQueue(exclude, focus, citiesRef.current ?? [])
-      setData(next)
+      const fresh = await fetchQueue(exclude, focus, citiesRef.current ?? [])
+      if (mine !== reqId.current) return true // risposta superata da una piu' recente
+      setDialConfig(fresh.dial)
+      if (keepCurrent) {
+        setData((d) => {
+          const current = d?.lead
+          if (!current) return fresh
+          const upcoming = fresh.lead && fresh.lead.id !== current.id ? fresh.lead : fresh.next && fresh.next.id !== current.id ? fresh.next : null
+          return { ...fresh, lead: current, next: upcoming }
+        })
+        return true
+      }
+      setData(fresh)
       setNote("")
       setShowNote(false)
       setDialed(false)
@@ -347,12 +371,23 @@ export function CallModePage({ query, onClearQuery }: { query: string; onClearQu
       setActionError("")
       return true
     } catch (e) {
-      setLoadError(errorText(e))
+      if (mine === reqId.current) setLoadError(errorText(e))
       return false
     } finally {
       setLoading(false)
     }
   }, [])
+
+  /** Mostra subito il contatto successivo (gia' scaricato) */
+  const advanceTo = (upcoming: QueueLead) => {
+    lockUntil.current = Date.now() + 450
+    setData((d) => (d ? { ...d, lead: upcoming, next: null } : d))
+    setNote("")
+    setShowNote(false)
+    setDialed(false)
+    setAddingPhone2(false)
+    setSheet(null)
+  }
 
   useEffect(() => {
     load([])
@@ -372,12 +407,25 @@ export function CallModePage({ query, onClearQuery }: { query: string; onClearQu
     toastTimer.current = setTimeout(() => setToast(null), 8000)
   }
 
-  /** Salva l'esito, poi passa al lead successivo con una breve transizione */
+  /** Salva l'esito e passa al lead successivo. Se il successivo e' gia' pronto, il cambio e' immediato e il salvataggio prosegue in sottofondo. */
   const commit = async (run: () => Promise<unknown>, toastText: string) => {
-    if (!lead || busy) return
-    setBusy(true)
+    if (!lead || busy || Date.now() < lockUntil.current) return
     setActionError("")
     const leadId = lead.id
+    const leadName = fullName(lead) || "il contatto"
+    const upcoming = data?.next ?? null
+
+    if (upcoming) {
+      advanceTo(upcoming)
+      run()
+        .then(() => showToast(toastText, leadId))
+        .catch((e) => setActionError(`Esito di ${leadName} non salvato (${errorText(e)}). Il contatto resta in coda.`))
+        .finally(() => load(skipped, undefined, true))
+      return
+    }
+
+    // niente "prossimo" gia' pronto: si aspetta il salvataggio e poi si ricarica
+    setBusy(true)
     try {
       await run()
     } catch (e) {
@@ -387,7 +435,7 @@ export function CallModePage({ query, onClearQuery }: { query: string; onClearQu
     }
     setSheet(null)
     setLeaving(true)
-    await sleep(160)
+    await sleep(60)
     await load(skipped)
     showToast(toastText, leadId)
     setLeaving(false)
@@ -433,11 +481,16 @@ export function CallModePage({ query, onClearQuery }: { query: string; onClearQu
   }
 
   const skip = async () => {
-    if (!lead) return
+    if (!lead || Date.now() < lockUntil.current) return
     const next = [...skipped, lead.id]
     setSkipped(next)
+    if (data?.next) {
+      advanceTo(data.next)
+      load(next, undefined, true)
+      return
+    }
     setLeaving(true)
-    await sleep(140)
+    await sleep(60)
     await load(next)
     setLeaving(false)
   }
@@ -735,10 +788,11 @@ export function CallModePage({ query, onClearQuery }: { query: string; onClearQu
           {active && (
           <div className="lh-actionbar">
             {dialed && <p className="lh-dialed">Chiamata avviata: scegli l'esito appena finisci.</p>}
+            <DialModeSwitch />
             <div className="lh-callrow">
               <a
                 className={`lh-big call ${lead.phone ? "" : "disabled"}`}
-                href={lead.phone ? `tel:${lead.phone}` : undefined}
+                {...dialProps(lead.phone)}
                 onClick={() => {
                   if (!lead.phone) return
                   setDialed(true)
@@ -750,7 +804,7 @@ export function CallModePage({ query, onClearQuery }: { query: string; onClearQu
               {lead.phone2 && (
                 <a
                   className="lh-big call alt"
-                  href={`tel:${lead.phone2}`}
+                  {...dialProps(lead.phone2)}
                   onClick={() => {
                     setDialed(true)
                     dialLead(lead.id).catch(() => {})

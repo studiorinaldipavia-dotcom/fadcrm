@@ -27,6 +27,8 @@ import {
   saveToContacts,
   timeHM,
   useOnline,
+  dialProps,
+  useDialConfig,
 } from "./shared"
 
 /* ---------- Scheda per aggiungere o modificare ---------- */
@@ -391,11 +393,11 @@ function AgendaCard({
               <>
                 {item.phone && (
                   <p className="lh-appt-line">
-                    <LIcon name="phone" size={15} /> <a href={`tel:${item.phone}`}>{item.phone}</a>
+                    <LIcon name="phone" size={15} /> <a {...dialProps(item.phone)}>{item.phone}</a>
                     {item.phone2 && (
                       <>
                         {" · "}
-                        <a href={`tel:${item.phone2}`}>{item.phone2}</a>
+                        <a {...dialProps(item.phone2)}>{item.phone2}</a>
                       </>
                     )}
                   </p>
@@ -474,7 +476,7 @@ function AgendaCard({
         )}
 
         {isCall && item.phone && !item.shared && (
-          <a className="lh-big call" href={`tel:${item.phone}`}>
+          <a className="lh-big call" {...dialProps(item.phone)}>
             <LIcon name="phone" size={20} /> Chiama ora
           </a>
         )}
@@ -571,6 +573,7 @@ function AgendaCard({
 }
 
 export function LeadAgendaPage({ onOpenCustomer }: { onOpenCustomer: (id: string) => void }) {
+  useDialConfig()
   const [day, setDay] = useState(localDateIso())
   const [items, setItems] = useState<AgendaItem[] | null>(null)
   const [session, setSession] = useState<{ active: boolean } | null>(null)

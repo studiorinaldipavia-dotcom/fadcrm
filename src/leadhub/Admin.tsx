@@ -10,6 +10,10 @@ import {
   fetchLeadAdmin,
   fetchLeadReport,
   saveLeadSettings,
+  saveDialSettings,
+  fetchLeadSettings,
+  fetchMyDial,
+  type DialConfig,
   purgeLeadList,
   releaseAgentLeads,
   reopenLeadSession,
@@ -19,7 +23,7 @@ import {
   type ReportData,
 } from "../services/leadsApi"
 import { FIELDS, guessMapping, parseFile, toImportRows, type ParsedSheet } from "./importer"
-import { Badge, LIcon, OutcomeBadge, SessionBadge, ago, dateTimeIt, downloadCsv, errorText, fullName, outcomeLabel } from "./shared"
+import { Badge, LIcon, OutcomeBadge, SessionBadge, ago, dateTimeIt, downloadCsv, errorText, fullName, outcomeLabel, setDialConfig } from "./shared"
 import type { ImportRow } from "../services/leadsApi"
 
 /** 1 lista = 50 contatti */
@@ -685,6 +689,109 @@ const feedText = (kind: string, outcome: string | null) => {
   return `esito: ${outcomeLabel[(outcome ?? "nuovo") as keyof typeof outcomeLabel] ?? outcome}`
 }
 
+/* ---------- Modalita' di chiamata: telefono normale oppure VoIP ---------- */
+
+const VOIP_PRESETS = [
+  { label: "SIP (softphone)", template: "sip:{numero}" },
+  { label: "Callto (Teams/Skype)", template: "callto:{numero}" },
+  { label: "Link web del centralino", template: "https://" },
+]
+
+function DialSettings() {
+  const [loaded, setLoaded] = useState(false)
+  const [canEdit, setCanEdit] = useState(false)
+  const [form, setForm] = useState<DialConfig>({ mode: "tel", template: "", prefix: "" })
+  const [message, setMessage] = useState("")
+  const [error, setError] = useState("")
+
+  useEffect(() => {
+    fetchLeadSettings()
+      .then((s) => {
+        setForm(s.dial)
+        setCanEdit(s.can_edit)
+        setLoaded(true)
+      })
+      .catch((e) => setError(errorText(e)))
+  }, [])
+
+  const save = async () => {
+    setError("")
+    setMessage("")
+    try {
+      const s = await saveDialSettings(form)
+      setForm(s.dial)
+      fetchMyDial().then(setDialConfig).catch(() => {})
+      setMessage("Salvato.")
+    } catch (e) {
+      setError(errorText(e))
+    }
+  }
+
+  if (!loaded) return error ? <p className="form-error">{error}</p> : null
+
+  return (
+    <section className="panel standalone-panel">
+      <div className="lh-pad">
+        <strong>Chiamate: telefono o VoIP</strong>
+        <p className="muted">
+          Ogni agente sceglie da solo se chiamare con il telefono normale o con il VoIP (dalla Call Mode o dal proprio profilo).
+          Qui imposti il collegamento VoIP aziendale e la modalità predefinita per chi non ha ancora scelto.
+        </p>
+        <div className="chip-row">
+          <button type="button" className={`chip ${form.mode === "tel" ? "on" : ""}`} disabled={!canEdit} onClick={() => setForm({ ...form, mode: "tel" })}>
+            Predefinito: telefono
+          </button>
+          <button type="button" className={`chip ${form.mode === "voip" ? "on" : ""}`} disabled={!canEdit} onClick={() => setForm({ ...form, mode: "voip" })}>
+            Predefinito: VoIP
+          </button>
+        </div>
+        {form.mode === "voip" && (
+          <div className="lh-voip-fields">
+            <div className="chip-row">
+              {VOIP_PRESETS.map((p) => (
+                <button key={p.label} type="button" className="chip" disabled={!canEdit} onClick={() => setForm({ ...form, template: p.template })}>
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <label>
+              <span>Collegamento di chiamata (usa {"{numero}"} dove va il numero)</span>
+              <input
+                className="link-field"
+                disabled={!canEdit}
+                placeholder="sip:{numero}"
+                value={form.template}
+                onChange={(e) => setForm({ ...form, template: e.target.value })}
+              />
+            </label>
+            <label>
+              <span>Prefisso da aggiungere ai numeri senza prefisso (facoltativo, es. +39)</span>
+              <input
+                className="link-field"
+                disabled={!canEdit}
+                placeholder="+39"
+                value={form.prefix}
+                onChange={(e) => setForm({ ...form, prefix: e.target.value })}
+              />
+            </label>
+            <p className="muted">
+              Sul dispositivo dell'agente deve essere installata un'app che gestisce quel tipo di collegamento (softphone, Teams, app del
+              centralino).
+            </p>
+          </div>
+        )}
+        {error && <p className="form-error">{error}</p>}
+        {message && <p className="form-ok flush">{message}</p>}
+        {canEdit && (
+          <button type="button" className="primary-button" onClick={save}>
+            Salva
+          </button>
+        )}
+      </div>
+    </section>
+  )
+}
+
 function ControlTab() {
   const [data, setData] = useState<ControlData | null>(null)
   const [error, setError] = useState("")
@@ -757,6 +864,7 @@ function ControlTab() {
           </div>
         </section>
       )}
+      <DialSettings />
       {error && (
         <p className="form-error" role="alert">
           {error}

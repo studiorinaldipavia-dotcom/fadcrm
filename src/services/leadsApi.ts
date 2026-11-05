@@ -39,10 +39,21 @@ export type CallSession = { start: string; end: string; active: boolean };
 
 export type QueueCity = { key: string; label: string; n: number };
 
+export type DialConfig = {
+  mode: "tel" | "voip";
+  template: string;
+  prefix: string;
+  available?: boolean;
+  personal?: "tel" | "voip" | null;
+};
+
 export type QueueData = {
   cities: QueueCity[];
   session: CallSession;
+  dial?: DialConfig;
   lead: QueueLead | null;
+  /** il contatto successivo, gia' pronto: serve a passare al prossimo senza aspettare */
+  next?: QueueLead | null;
   counts: {
     fresh: number;
     due: number;
@@ -142,10 +153,15 @@ export type Colleague = { id: string; first_name: string; last_name: string; rol
 export const fetchColleagues = () => request<{ people: Colleague[] }>("/leads-colleagues");
 export const shareLead = (id: string, user_ids: string[]) => work<{ ok: true; shared: number }>({ action: "share", id, user_ids });
 
-export type LeadSettings = { session: CallSession; end_options: string[]; can_edit: boolean };
+export type LeadSettings = { session: CallSession; dial: DialConfig; end_options: string[]; can_edit: boolean };
 export const fetchLeadSettings = () => request<LeadSettings>("/leads-settings");
 export const saveLeadSettings = (call_end: string) =>
   request<LeadSettings>("/leads-settings", { method: "POST", body: JSON.stringify({ call_end }) });
+export const saveDialSettings = (dial: DialConfig) =>
+  request<LeadSettings>("/leads-settings", {
+    method: "POST",
+    body: JSON.stringify({ dial_mode: dial.mode, voip_template: dial.template, voip_prefix: dial.prefix }),
+  });
 
 export type SearchHit = {
   id: string;
@@ -328,3 +344,8 @@ export const fetchLeadReport = (listId?: string, exportClean = false, outcome?: 
   const s = q.toString();
   return request<ReportData>(`/leads-report${s ? `?${s}` : ""}`);
 };
+
+/* ---------- Modalita' di chiamata personale (telefono / VoIP) ---------- */
+export const fetchMyDial = () => request<DialConfig>("/dial-settings");
+export const saveMyDial = (mode: "tel" | "voip") =>
+  request<DialConfig>("/dial-settings", { method: "POST", body: JSON.stringify({ mode }) });

@@ -492,3 +492,9 @@
 .lh-cityrow-item input { width: 20px; height: 20px; accent-color: var(--accent); }
 .lh-cityrow-item span { flex: 1; font-weight: 600; }
 .lh-cityrow-item b { min-width: 28px; padding: 3px 8px; border-radius: 10px; background: var(--surface-hover); text-align: center; font-size: 12px; }
+
+/* Modalità di chiamata (telefono / VoIP) */
+.lh-voip-fields { margin: 12px 0; display: grid; gap: 10px; max-width: 520px; }
+.lh-voip-fields label { display: grid; gap: 5px; font-size: 11px; font-weight: 700; }
+.lh-dialswitch { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; font-size: 11px; font-weight: 700; }
+.lh-dialswitch small { flex-basis: 100%; font-weight: 400; }

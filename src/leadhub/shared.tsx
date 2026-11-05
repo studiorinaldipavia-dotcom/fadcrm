@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react"
 import "../leadhub.css"
-import type { AppointmentResult, LeadOutcome } from "../services/leadsApi"
+import { fetchMyDial, saveMyDial, type AppointmentResult, type DialConfig, type LeadOutcome } from "../services/leadsApi"
 
 /* ---------- Icone (stesso stile lineare del resto del CRM) ---------- */
 
@@ -180,6 +180,86 @@ export function errorText(error: unknown): string {
 
 /** Vero se l'errore e' un problema di rete (non una risposta del server) */
 export const isNetworkError = (error: unknown) => error instanceof TypeError
+
+/* ---------- Come si chiama: telefono normale (tel:) oppure VoIP ---------- */
+
+let dialConfig: DialConfig = { mode: "tel", template: "", prefix: "", available: false, personal: null }
+let dialLoading: Promise<void> | null = null
+const dialListeners = new Set<() => void>()
+
+export function setDialConfig(config: DialConfig | undefined) {
+  if (!config || JSON.stringify(config) === JSON.stringify(dialConfig)) return
+  dialConfig = config
+  dialListeners.forEach((listener) => listener())
+}
+
+/** Attributi del link "Chiama": con il VoIP attivo usa il collegamento scelto dall'amministratore, altrimenti tel: */
+export function dialProps(number: string | null | undefined): { href?: string; target?: string; rel?: string } {
+  if (!number) return {}
+  if (dialConfig.mode !== "voip" || !dialConfig.template.includes("{numero}")) return { href: `tel:${number}` }
+  let clean = number.replace(/[^\d+]/g, "")
+  if (clean.startsWith("00")) clean = `+${clean.slice(2)}`
+  const full = clean.startsWith("+") || !dialConfig.prefix ? clean : `${dialConfig.prefix}${clean}`
+  const web = /^https?:/i.test(dialConfig.template)
+  const href = dialConfig.template.replace(/\{numero\}/g, web ? encodeURIComponent(full) : full)
+  return web ? { href, target: "_blank", rel: "noopener noreferrer" } : { href }
+}
+
+/** Da usare nelle pagine con numeri cliccabili: carica la modalita' di chiamata di questo utente e aggiorna la pagina quando cambia */
+export function useDialConfig(): DialConfig {
+  const [, refresh] = useState(0)
+  useEffect(() => {
+    const listener = () => refresh((n) => n + 1)
+    dialListeners.add(listener)
+    if (!dialLoading) {
+      dialLoading = fetchMyDial()
+        .then(setDialConfig)
+        .catch(() => {
+          dialLoading = null
+        })
+    }
+    return () => {
+      dialListeners.delete(listener)
+    }
+  }, [])
+  return dialConfig
+}
+
+/** Scelta personale: telefono normale oppure VoIP. Ogni utente decide per se'. */
+export function DialModeSwitch() {
+  const config = useDialConfig()
+  const [error, setError] = useState("")
+  const pick = async (mode: "tel" | "voip") => {
+    if (mode === config.mode) return
+    setError("")
+    try {
+      setDialConfig(await saveMyDial(mode))
+    } catch (e) {
+      setError(errorText(e))
+    }
+  }
+  return (
+    <div className="lh-dialswitch">
+      <span>Chiama con</span>
+      <div className="chip-row">
+        <button type="button" className={`chip ${config.mode === "tel" ? "on" : ""}`} onClick={() => pick("tel")}>
+          Telefono
+        </button>
+        <button
+          type="button"
+          className={`chip ${config.mode === "voip" ? "on" : ""}`}
+          disabled={!config.available}
+          title={config.available ? undefined : "Il VoIP non è ancora configurato dall'amministratore"}
+          onClick={() => pick("voip")}
+        >
+          VoIP
+        </button>
+      </div>
+      {!config.available && <small className="muted">VoIP non ancora configurato dall'amministratore.</small>}
+      {error && <small className="form-error flush">{error}</small>}
+    </div>
+  )
+}
 
 export function useOnline(): boolean {
   const [online, setOnline] = useState(() => navigator.onLine)
