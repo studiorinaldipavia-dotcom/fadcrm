@@ -182,6 +182,8 @@ export const createAgendaItem = (fields: AgendaFields & { appointment_at: string
 export const updateAgendaItem = (id: string, fields: AgendaFields & { when?: string }) =>
   work<{ ok: true }>({ action: "agenda_update", id, ...fields });
 
+export const rescheduleAgendaItem = (id: string, when: string) => work<{ ok: true }>({ action: "agenda_reschedule", id, when });
+
 export const deleteAgendaItem = (id: string) => work<{ ok: true }>({ action: "agenda_delete", id });
 
 /* ---------- Admin ---------- */
@@ -263,7 +265,6 @@ export const releaseAgentLeads = (agent_id: string, list_id?: string) =>
 
 export const closeLeadSession = (list_id: string) => admin<{ ok: true }>({ action: "close_session", list_id });
 export const reopenLeadSession = (list_id: string) => admin<{ ok: true }>({ action: "reopen_session", list_id });
-export const purgeLeadList = (list_id: string) => admin<{ anonymized: number }>({ action: "purge_now", list_id });
 export const deleteLeadList = (list_id: string) => admin<{ ok: true }>({ action: "delete_list", list_id });
 export const deleteWrongLeads = (list_id?: string) => admin<{ deleted: number }>({ action: "delete_wrong", list_id });
 

@@ -1,13 +1,9 @@
 import { json, requireUser, route, sql } from "./_shared/auth";
-import { purgeLeads } from "./_shared/leads";
 
 // Panoramica LeadHub per chi ha "leads.manage": liste, agenti disponibili, contatti da assegnare.
 export const handler = route("GET", async (event) => {
   const auth = await requireUser(event, ["leads.manage"]);
   if ("response" in auth) return auth.response;
-
-  // pulizia "pigra": se la funzione programmata non e' ancora girata, la facciamo adesso
-  await purgeLeads();
 
   const lists = await sql`
     SELECT l.id, l.name, l.source_filename, l.created_at, l.session_closed_at, l.purge_after, l.anonymized_at,

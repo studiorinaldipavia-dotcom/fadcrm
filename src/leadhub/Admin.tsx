@@ -14,7 +14,6 @@ import {
   fetchLeadSettings,
   fetchMyDial,
   type DialConfig,
-  purgeLeadList,
   releaseAgentLeads,
   reopenLeadSession,
   type ControlData,
@@ -81,13 +80,7 @@ function Flash({ ok, error, onClose }: { ok?: string; error?: string; onClose: (
 
 function listStatus(list: LeadList, nowMs: number) {
   if (list.anonymized_at) return <Badge tone="neutral">Dati rimossi</Badge>
-  if (list.session_closed_at && list.purge_after) {
-    const left = new Date(list.purge_after).getTime() - nowMs
-    if (left <= 0) return <Badge tone="red">Pulizia in corso</Badge>
-    const h = Math.floor(left / 3600000)
-    const m = Math.floor((left % 3600000) / 60000)
-    return <Badge tone="yellow">Chiusa · pulizia tra {h}h {m}m</Badge>
-  }
+  if (list.session_closed_at) return <Badge tone="yellow">Sessione chiusa</Badge>
   return <Badge tone="green">Sessione aperta</Badge>
 }
 
@@ -388,8 +381,8 @@ function ListsTab({ data, reload }: { data: LeadAdminData; reload: () => Promise
         <div className="lh-pad tight">
           <Flash ok={msg.ok} error={msg.error} onClose={() => setMsg({ ok: "", error: "" })} />
           <p className="modal-hint lh-hint">
-            <LIcon name="shield" size={14} /> Quando chiudi la sessione, 24 ore dopo nomi, telefoni e indirizzi vengono anonimizzati automaticamente
-            (restano solo gli esiti per le statistiche). Gli appuntamenti futuri non ancora svolti sono esclusi.
+            <LIcon name="shield" size={14} /> I contatti e gli appuntamenti restano sempre nel database. Con «Scarica lista pulita» (dal Report) escono
+            solo i numeri inesistenti e i trasferiti.
           </p>
         </div>
         {data.lists.length === 0 ? (
@@ -442,27 +435,12 @@ function ListsTab({ data, reload }: { data: LeadAdminData; reload: () => Promise
                           className="link-button"
                           disabled={!!busy}
                           onClick={() =>
-                            act(l.id, "close", `Chiudere la sessione di "${l.name}"? Tra 24 ore i dati personali dei contatti saranno anonimizzati.`, async () => (await closeLeadSession(l.id), "Sessione chiusa: pulizia automatica tra 24 ore"))
+                            act(l.id, "close", `Chiudere la sessione di "${l.name}"?`, async () => (await closeLeadSession(l.id), "Sessione chiusa"))
                           }
                         >
                           Chiudi sessione
                         </button>
                       ))}
-                    {!l.anonymized_at && (
-                      <button
-                        type="button"
-                        className="link-button"
-                        disabled={!!busy}
-                        onClick={() =>
-                          act(l.id, "purge", `Anonimizzare ORA tutti i contatti di "${l.name}"? L'operazione non si può annullare.`, async () => {
-                            const r = await purgeLeadList(l.id)
-                            return `${r.anonymized} contatti anonimizzati`
-                          })
-                        }
-                      >
-                        Ripulisci ora
-                      </button>
-                    )}
                     <button
                       type="button"
                       className="link-button danger"
@@ -1089,8 +1067,18 @@ function ReportTab({ data, reload }: { data: LeadAdminData; reload: () => Promis
     }
   }
 
-  const exportClean = async () => {
-    if (!listId) return
+  const wrongCount = report?.corrections.filter((c) => c.wrong_number).length ?? 0
+
+  // "Scarica lista pulita": scarica tutti i contatti tranne inesistenti e trasferiti, e toglie dal database solo quelli.
+  // Gli appuntamenti e gli altri contatti non vengono mai cancellati.
+  const downloadClean = async () => {
+    if (!listId || !list) return
+    if (
+      !window.confirm(
+        `Scaricare la lista pulita di "${list.name}"?\n\nDal database verranno eliminati solo i contatti inesistenti e trasferiti. Appuntamenti e tutti gli altri contatti restano dove sono.`,
+      )
+    )
+      return
     setBusy(true)
     try {
       const res = await fetchLeadReport(listId, true)
@@ -1112,8 +1100,10 @@ function ReportTab({ data, reload }: { data: LeadAdminData; reload: () => Promis
           [r.agent_first_name, r.agent_last_name].filter(Boolean).join(" ") || null,
         ]),
       ]
-      downloadCsv(`dati-puliti-${(list?.name ?? "lista").replace(/\W+/g, "-")}.csv`, rows)
-      setMsg({ ok: `Esportati ${res.clean.length} contatti con i dati corretti dagli agenti`, error: "" })
+      downloadCsv(`lista-pulita-${(list.name ?? "lista").replace(/\W+/g, "-")}.csv`, rows)
+      const removed = await deleteWrongLeads(listId)
+      setMsg({ ok: `Lista pulita scaricata: ${res.clean.length} contatti. Tolti dal database ${removed.deleted} tra inesistenti e trasferiti.`, error: "" })
+      await Promise.all([load(), reload()])
     } catch (e) {
       setMsg({ ok: "", error: errorText(e) })
     } finally {
@@ -1138,36 +1128,6 @@ function ReportTab({ data, reload }: { data: LeadAdminData; reload: () => Promis
         dateTimeIt((c.corrected_at ?? c.outcome_at) as string),
       ]),
     ])
-  }
-
-  const wrongCount = report?.corrections.filter((c) => c.wrong_number).length ?? 0
-
-  const deleteWrong = async () => {
-    if (!window.confirm(`Eliminare dal database ${wrongCount} contatti segnalati come inesistenti o trasferiti${list ? ` nella lista "${list.name}"` : ""}?`)) return
-    setBusy(true)
-    try {
-      const res = await deleteWrongLeads(listId || undefined)
-      setMsg({ ok: `${res.deleted} contatti eliminati`, error: "" })
-      await Promise.all([load(), reload()])
-    } catch (e) {
-      setMsg({ ok: "", error: errorText(e) })
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const purge = async () => {
-    if (!list || !window.confirm(`Anonimizzare ORA tutti i contatti di "${list.name}"? L'operazione non si può annullare.`)) return
-    setBusy(true)
-    try {
-      const res = await purgeLeadList(list.id)
-      setMsg({ ok: `${res.anonymized} contatti anonimizzati`, error: "" })
-      await Promise.all([load(), reload()])
-    } catch (e) {
-      setMsg({ ok: "", error: errorText(e) })
-    } finally {
-      setBusy(false)
-    }
   }
 
   return (
@@ -1217,20 +1177,14 @@ function ReportTab({ data, reload }: { data: LeadAdminData; reload: () => Promis
             </button>
           </div>
           <div className="lh-actions-row left">
-            <button type="button" className="secondary-button" disabled={busy || !listId || !!list?.anonymized_at} onClick={exportClean} title={listId ? "" : "Scegli una lista"}>
-              <LIcon name="download" size={15} /> Esporta dati puliti
+            <button type="button" className="secondary-button" disabled={busy || !listId || !!list?.anonymized_at} onClick={downloadClean} title={listId ? "" : "Scegli una lista"}>
+              <LIcon name="download" size={15} /> Scarica lista pulita{listId && wrongCount > 0 ? ` (tolti ${wrongCount} inesistenti/trasferiti)` : ""}
             </button>
             <button type="button" className="secondary-button" disabled={!report || report.corrections.length === 0} onClick={exportCorrections}>
               <LIcon name="download" size={15} /> Esporta segnalazioni
             </button>
-            <button type="button" className="secondary-button" disabled={busy || wrongCount === 0} onClick={deleteWrong}>
-              <LIcon name="trash" size={15} /> Elimina inesistenti e trasferiti ({wrongCount})
-            </button>
-            <button type="button" className="secondary-button danger-outline" disabled={busy || !list || !!list.anonymized_at} onClick={purge}>
-              <LIcon name="shield" size={15} /> Ripulisci lista (anonimizza)
-            </button>
           </div>
-          {!listId && <p className="modal-hint lh-hint">Per esportare i dati puliti o ripulire il database scegli una lista.</p>}
+          {!listId && <p className="modal-hint lh-hint">Per scaricare la lista pulita scegli una lista.</p>}
         </div>
       </section>
 

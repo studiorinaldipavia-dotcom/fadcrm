@@ -90,7 +90,7 @@ const streetLine = (l: Record<string, any>) =>
 const placeOf = (l: Record<string, any>) => [streetLine(l), l.city].filter(Boolean).join(", ");
 
 // Azioni dell'agente sui lead assegnati a lui:
-// dial | outcome | edit | wrong_number | undo | appointment_result | agenda_create | agenda_update | agenda_delete
+// dial | outcome | edit | wrong_number | undo | appointment_result | agenda_create | agenda_update | agenda_reschedule | agenda_delete
 export const handler = route("POST", async (event) => {
   const auth = await requireUser(event, ["leads.work"]);
   if ("response" in auth) return auth.response;
@@ -387,6 +387,34 @@ export const handler = route("POST", async (event) => {
         WHERE id = ${lead.calendar_event_id}::uuid`;
     }
     await logAudit(user.id, "appuntamento_lead_modificato", "leads", id, {});
+    return json(200, { ok: true });
+  }
+
+  /* ----- AGENDA: RIPROGRAMMA (stesso appuntamento o richiamo, altra ora o altro giorno) ----- */
+  // Cambia solo la data/ora: nessun dato del contatto viene toccato e non conta come "correzione" nel report.
+  if (action === "agenda_reschedule") {
+    const isAppt = lead.outcome === "appuntamento" && !lead.customer_id && (!lead.appointment_result || lead.appointment_result === "in_attesa");
+    const isCall = lead.outcome === "da_ricontattare";
+    if (!isAppt && !isCall) return json(409, { error: "Questo appuntamento non si può più riprogrammare" });
+
+    const when = validDate(body.when, 60000, 365);
+    if (!when) return json(400, { error: "Scegli una data e un'ora future" });
+
+    const fmt = (d: Date | string | null) =>
+      d ? new Date(d).toLocaleString("it-IT", { timeZone: "Europe/Rome", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—";
+    const before = isAppt ? lead.appointment_at : lead.callback_at;
+    const noteLine = `${stamp()}Riprogrammato: ${fmt(before)} → ${fmt(when)}`;
+
+    await sql`
+      UPDATE leads SET
+             appointment_at = CASE WHEN ${isAppt}::boolean THEN ${when.toISOString()}::timestamptz ELSE appointment_at END,
+             callback_at = CASE WHEN ${isCall}::boolean THEN ${when.toISOString()}::timestamptz ELSE callback_at END,
+             notes = left(coalesce(notes || E'\n', '') || ${noteLine}::text, 2000)
+      WHERE id = ${id}::uuid`;
+    if (lead.calendar_event_id) {
+      await sql`UPDATE calendar_events SET starts_at = ${when.toISOString()}::timestamptz WHERE id = ${lead.calendar_event_id}::uuid`;
+    }
+    await logAudit(user.id, "appuntamento_lead_riprogrammato", "leads", id, { da: before, a: when.toISOString() });
     return json(200, { ok: true });
   }
 

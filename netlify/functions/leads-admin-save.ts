@@ -1,7 +1,6 @@
 import { json, logAudit, parseBody, requireUser, route, sql } from "./_shared/auth";
 import { UUID_RE } from "./_shared/customers";
 import {
-  PURGE_HOURS,
   cleanFiscal,
   cleanNotes,
   cleanPhone,
@@ -9,13 +8,12 @@ import {
   cleanText,
   normSector,
   phoneKey,
-  purgeLeads,
 } from "./_shared/leads";
 
 const MAX_ROWS_PER_CALL = 1000;
 
 // Azioni: create_list | add_rows | assign | unassign | close_session | reopen_session
-//         | purge_now | delete_list | delete_wrong
+//         | delete_list | delete_wrong
 export const handler = route("POST", async (event) => {
   const auth = await requireUser(event, ["leads.manage"]);
   if ("response" in auth) return auth.response;
@@ -156,7 +154,7 @@ export const handler = route("POST", async (event) => {
     if (action === "close_session") {
       await sql`
         UPDATE lead_lists
-        SET session_closed_at = now(), purge_after = now() + (${PURGE_HOURS}::int * interval '1 hour')
+        SET session_closed_at = now(), purge_after = NULL
         WHERE id = ${listId}`;
     } else {
       await sql`UPDATE lead_lists SET session_closed_at = NULL, purge_after = NULL WHERE id = ${listId}`;
@@ -165,15 +163,6 @@ export const handler = route("POST", async (event) => {
       name: list.name,
     });
     return json(200, { ok: true });
-  }
-
-  /* ----- RIPULISCE SUBITO (anonimizza) ----- */
-  if (action === "purge_now") {
-    if (!listId) return json(400, { error: "Lista mancante" });
-    if (!(await listExists(listId))) return json(404, { error: "Lista non trovata" });
-    const n = await purgeLeads(listId);
-    await logAudit(user.id, "lead_lista_anonimizzata", "lead_lists", listId, { leads: n });
-    return json(200, { anonymized: n });
   }
 
   /* ----- ELIMINA LA LISTA ----- */

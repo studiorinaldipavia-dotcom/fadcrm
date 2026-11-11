@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react"
 import {
   createAgendaItem,
   deleteAgendaItem,
+  rescheduleAgendaItem,
   fetchAgenda,
   fetchColleagues,
   shareLead,
@@ -27,6 +28,7 @@ import {
   saveToContacts,
   timeHM,
   useOnline,
+  dateTimeIt,
   dialProps,
   useDialConfig,
 } from "./shared"
@@ -275,6 +277,90 @@ function PickTimeSheet({ busy, onCancel, onConfirm }: { busy: boolean; onCancel:
   )
 }
 
+/* ---------- Riprogramma: stesso appuntamento, altra ora o altro giorno ---------- */
+
+const roundUp15 = (d: Date) => new Date(Math.ceil(d.getTime() / 900000) * 900000)
+const hhmm = (d: Date) => {
+  // il selettore offre le ore 07-21
+  if (d.getHours() < 7) return "07:00"
+  if (d.getHours() > 21) return "21:45"
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`
+}
+
+function RescheduleSheet({ item, onClose, onSaved }: { item: AgendaItem; onClose: () => void; onSaved: () => void }) {
+  const current = new Date(item.appointment_at)
+  const start = current.getTime() > Date.now() ? current : roundUp15(new Date())
+  const [date, setDate] = useState(localDateIso(start))
+  const [time, setTime] = useState(hhmm(start))
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+
+  const pick = (d: Date) => {
+    setDate(localDateIso(d))
+    setTime(hhmm(d))
+  }
+  const quick = (minutes: number) => pick(roundUp15(new Date(Date.now() + minutes * 60000)))
+  const tomorrow = () => {
+    const d = new Date(start)
+    d.setDate(d.getDate() + 1)
+    pick(d)
+  }
+
+  const save = async () => {
+    const when = new Date(`${date}T${time}`)
+    if (isNaN(when.getTime()) || when.getTime() < Date.now() - 60000) return setError("Scegli una data e un'ora future")
+    setBusy(true)
+    setError("")
+    try {
+      await rescheduleAgendaItem(item.id, when.toISOString())
+      onSaved()
+    } catch (e) {
+      setError(errorText(e))
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="lh-sheet-layer" onClick={onClose}>
+      <div className="lh-sheet" role="dialog" aria-label="Riprogramma" onClick={(e) => e.stopPropagation()}>
+        <div className="lh-sheet-grip" />
+        <h2>Riprogramma</h2>
+        <p className="lh-sheet-hint">
+          {fullName(item)} · ora fissato per <b>{dateTimeIt(item.appointment_at)}</b>
+        </p>
+        <div className="lh-dtp-days" role="group" aria-label="Scelte rapide">
+          <button type="button" className="lh-dtp-chip" onClick={() => quick(30)}>
+            <b>+30 min</b>
+          </button>
+          <button type="button" className="lh-dtp-chip" onClick={() => quick(60)}>
+            <b>+1 ora</b>
+          </button>
+          <button type="button" className="lh-dtp-chip" onClick={() => quick(120)}>
+            <b>+2 ore</b>
+          </button>
+          <button type="button" className="lh-dtp-chip" onClick={tomorrow}>
+            <b>Domani</b>
+          </button>
+        </div>
+        <DateTimePicker date={date} time={time} onChange={(d, t) => (setDate(d), setTime(t))} />
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="lh-sheet-actions">
+          <button type="button" className="lh-big secondary" onClick={onClose} disabled={busy}>
+            Annulla
+          </button>
+          <button type="button" className="lh-big green" onClick={save} disabled={busy}>
+            <LIcon name="check" size={20} /> {busy ? "Salvo…" : "Sposta"}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function AgendaCard({
   item,
   canDelete,
@@ -296,6 +382,7 @@ function AgendaCard({
   const [created, setCreated] = useState<string | null>(null)
   const [open, setOpen] = useState(false)
   const [pickTime, setPickTime] = useState(false)
+  const [rescheduling, setRescheduling] = useState(false)
 
   const isCall = item.kind === "richiamo"
   const result = item.appointment_result
@@ -309,6 +396,8 @@ function AgendaCard({
   // modificare ed eliminare: solo chi ha creato l'appuntamento. Esitare e condividere: anche chi lo riceve condiviso.
   const editable = !item.shared && !item.anonymized && !customerId
   const canShare = !item.anonymized && !customerId
+  // si puo' spostare solo l'appuntamento ancora da svolgere (o un richiamo) e solo se e' il proprio
+  const canReschedule = editable && (isCall || !result || result === "in_attesa")
   const showResults = !isCall && !item.anonymized && !customerId && result !== "contratto_chiuso"
 
   const choose = async (value: "contratto_chiuso" | "incontrato_con_trattativa" | "incontrato_senza_trattativa" | "annullato") => {
@@ -552,6 +641,11 @@ function AgendaCard({
                 <LIcon name="pencil" size={14} /> Modifica
               </button>
             )}
+            {canReschedule && (
+              <button type="button" className="lh-link" onClick={() => setRescheduling(true)} disabled={busy || !online}>
+                <LIcon name="clock" size={14} /> Riprogramma
+              </button>
+            )}
             {editable && canDelete && (
               <button type="button" className="lh-link danger" onClick={remove} disabled={busy || !online}>
                 <LIcon name="trash" size={14} /> Elimina
@@ -567,6 +661,16 @@ function AgendaCard({
           </>
         )}
       </div>
+      {rescheduling && (
+        <RescheduleSheet
+          item={item}
+          onClose={() => setRescheduling(false)}
+          onSaved={() => {
+            setRescheduling(false)
+            onChanged()
+          }}
+        />
+      )}
       {pickTime && <PickTimeSheet busy={busy} onCancel={() => setPickTime(false)} onConfirm={(iso) => callbackChoose("appuntamento", iso)} />}
     </article>
   )

@@ -17,8 +17,6 @@ export const streetTypeName = (code: string | null | undefined) => (code ? (STRE
 export const SECTORS = ["Luce", "Gas", "Telefonia"] as const;
 export const AGENT_OUTCOMES = ["appuntamento", "da_ricontattare", "non_interessato", "segreteria"] as const;
 
-/** Quante ore dopo la chiusura della sessione i dati personali vengono anonimizzati */
-export const PURGE_HOURS = 24;
 /** Minuti dopo i quali un lead "da ricontattare" / "segreteria" torna in coda */
 export const RETRY_MINUTES = 60;
 /** Dopo quanti tentativi la segreteria non viene piu' riproposta */
@@ -97,39 +95,6 @@ export function productForSector(sector: string | null): string[] {
   return [];
 }
 
-/**
- * Anonimizza i lead delle liste la cui sessione e' chiusa da piu' di 24 ore (o di una lista precisa, subito).
- * Restano solo esito, settore e date per le statistiche. Non tocca gli appuntamenti ancora da svolgere.
- * Ritorna il numero di lead anonimizzati.
- */
-export async function purgeLeads(listId: string | null = null): Promise<number> {
-  const rows = await sql`
-    WITH due AS (
-      SELECT id FROM lead_lists
-      WHERE anonymized_at IS NULL
-        AND ((${listId}::uuid IS NULL AND purge_after IS NOT NULL AND purge_after <= now())
-             OR (${listId}::uuid IS NOT NULL AND id = ${listId}::uuid))
-    ), cleaned AS (
-      UPDATE leads l SET
-        first_name = NULL, last_name = NULL, phone = NULL, phone2 = NULL, address = NULL, house_number = NULL, street_type = NULL, provider = NULL,
-        fiscal_code = NULL, city = NULL, province = NULL, notes = NULL, orig_data = NULL, anonymized_at = now()
-      WHERE l.list_id IN (SELECT id FROM due)
-        AND l.anonymized_at IS NULL
-        AND NOT (l.appointment_result = 'in_attesa' AND l.appointment_at > now())
-      RETURNING l.id
-    ), closed AS (
-      UPDATE lead_lists SET anonymized_at = now()
-      WHERE id IN (SELECT id FROM due)
-        AND NOT EXISTS (
-          SELECT 1 FROM leads x
-          WHERE x.list_id = lead_lists.id AND x.anonymized_at IS NULL
-            AND NOT (x.id IN (SELECT id FROM cleaned)))
-      RETURNING id
-    )
-    SELECT (SELECT count(*) FROM cleaned)::int AS n`;
-  return rows[0]?.n ?? 0;
-}
-
 /* ---------- Orario della Call Mode (default 09:00-15:30, regolabile da manager e amministratore) ---------- */
 
 export const CALL_END_OPTIONS = ["13:30", "15:30", "17:30"] as const;
@@ -155,4 +120,41 @@ export async function getCallWindow(): Promise<CallWindow> {
   const end = /^\d{2}:\d{2}$/.test(map.call_end ?? "") ? map.call_end : "15:30";
   const now = romeMinutesNow();
   return { start, end, active: now >= toMinutes(start) && now < toMinutes(end) };
+}
+
+
+/* ---------- Modalita' di chiamata: telefono normale (tel:) oppure VoIP ---------- */
+
+export type DialConfig = {
+  /** modalita' effettiva per chi chiede: la scelta personale, altrimenti quella aziendale */
+  mode: "tel" | "voip";
+  template: string;
+  prefix: string;
+  /** il VoIP e' utilizzabile (l'amministratore ha impostato un collegamento valido) */
+  available: boolean;
+  /** scelta personale dell'agente (null = non ha scelto: vale l'impostazione aziendale) */
+  personal: "tel" | "voip" | null;
+};
+
+/** Il collegamento VoIP puo' usare solo questi schemi (niente javascript:, data: ecc.) */
+export function validDialTemplate(template: string): boolean {
+  return template.length <= 300 && template.includes("{numero}") && /^(sip:|sips:|callto:|tel:|https:\/\/)/i.test(template);
+}
+
+export async function getDialConfig(userId?: string): Promise<DialConfig> {
+  const keys = ["dial_mode", "voip_template", "voip_prefix", ...(userId ? [`dial_user:${userId}`] : [])];
+  const rows = await sql`SELECT key, value FROM leadhub_settings WHERE key = ANY(${keys}::text[])`;
+  const map = Object.fromEntries(rows.map((r) => [r.key as string, r.value as string]));
+  const template = map.voip_template ?? "";
+  const available = validDialTemplate(template);
+  const mine = userId ? map[`dial_user:${userId}`] : undefined;
+  const personal = mine === "voip" || mine === "tel" ? mine : null;
+  const wanted = personal ?? (map.dial_mode === "voip" ? "voip" : "tel");
+  return {
+    mode: wanted === "voip" && available ? "voip" : "tel",
+    template,
+    prefix: /^\+?\d{0,6}$/.test(map.voip_prefix ?? "") ? (map.voip_prefix ?? "") : "",
+    available,
+    personal,
+  };
 }
